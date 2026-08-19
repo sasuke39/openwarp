@@ -131,7 +131,26 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" << 'PLIST'
 PLIST
 
 echo ""
-echo "=== Step 4/5: Registering URL scheme ==="
+echo "=== Step 4/5: Signing app bundle ==="
+SIGNING_IDENTITY="${WARPLOCAL_SIGNING_IDENTITY:-}"
+if [[ -z "$SIGNING_IDENTITY" ]]; then
+  SIGNING_IDENTITY="$(
+    security find-identity -v -p codesigning 2>/dev/null \
+      | awk '/Apple Development/ {print $2; exit}'
+  )"
+fi
+
+if [[ -n "$SIGNING_IDENTITY" ]]; then
+  echo "  -> stable Apple Development identity: $SIGNING_IDENTITY"
+  codesign --force --deep --options runtime --sign "$SIGNING_IDENTITY" "$BUNDLE_DIR"
+else
+  echo "  -> no Apple Development identity found; using ad-hoc signature"
+  codesign --force --deep --sign - "$BUNDLE_DIR"
+fi
+codesign --verify --deep --strict "$BUNDLE_DIR"
+
+echo ""
+echo "=== Step 5/5: Registering URL scheme ==="
 LSREGISTER=$(find /System/Library/Frameworks/CoreServices.framework -name lsregister 2>/dev/null | head -1)
 "$LSREGISTER" -f "$BUNDLE_DIR" 2>/dev/null || true
 

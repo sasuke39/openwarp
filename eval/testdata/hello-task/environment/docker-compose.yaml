@@ -1,0 +1,5 @@
+services:
+  main:
+    image: ubuntu:22.04
+    command: sleep infinity
+    working_dir: /work

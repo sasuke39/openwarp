@@ -1,0 +1,166 @@
+20251031: Pulling from sasuke39/tb2/qemu-startup
+20251031: Pulling from sasuke39/tb2/hf-model-inference
+20251031: Pulling from sasuke39/tb2/mteb-retrieve
+d207cc66da44: Pulling fs layer
+3d84f27ee395: Pulling fs layer
+a74b6126a333: Pulling fs layer
+fe2b0116b821: Pulling fs layer
+851bb1368529: Pulling fs layer
+90b04f7874fd: Pulling fs layer
+a0c6b4cb481d: Pulling fs layer
+20251031: Pulling from sasuke39/tb2/reshard-c4-data
+b1badc6e5066: Already exists
+b1badc6e5066: Already exists
+fe2b0116b821: Waiting
+851bb1368529: Waiting
+abe1fea37542: Pulling fs layer
+15d8343a97c7: Pulling fs layer
+7c5b4bbef033: Pulling fs layer
+13e30b69e389: Pulling fs layer
+cc20e1fa4454: Pulling fs layer
+eb09864e43e6: Pulling fs layer
+1095d7775278: Pulling fs layer
+420d334c0bc9: Pulling fs layer
+7bb3f3185069: Pulling fs layer
+abe1fea37542: Waiting
+15d8343a97c7: Waiting
+7c5b4bbef033: Waiting
+13e30b69e389: Waiting
+cc20e1fa4454: Waiting
+eb09864e43e6: Waiting
+1095d7775278: Waiting
+a0c6b4cb481d: Waiting
+420d334c0bc9: Waiting
+7bb3f3185069: Waiting
+90b04f7874fd: Waiting
+20251031: Pulling from sasuke39/tb2/qemu-alpine-ssh
+20251031: Pulling from sasuke39/tb2/pytorch-model-recovery
+d207cc66da44: Pulling fs layer
+3d84f27ee395: Pulling fs layer
+a74b6126a333: Pulling fs layer
+fe2b0116b821: Pulling fs layer
+851bb1368529: Pulling fs layer
+90b04f7874fd: Pulling fs layer
+a0c6b4cb481d: Pulling fs layer
+a0c6b4cb481d: Waiting
+851bb1368529: Waiting
+fe2b0116b821: Waiting
+90b04f7874fd: Waiting
+b1badc6e5066: Already exists
+7e88bf276da0: Already exists
+7e88bf276da0: Already exists
+7e88bf276da0: Already exists
+d55dfff74d98: Already exists
+d55dfff74d98: Already exists
+d55dfff74d98: Already exists
+e97853488aa5: Already exists
+e97853488aa5: Already exists
+63ff33ad641b: Already exists
+e97853488aa5: Already exists
+63ff33ad641b: Already exists
+63ff33ad641b: Already exists
+c2e82dc171cf: Pulling fs layer
+6173fd1b5c8a: Pulling fs layer
+f82b85998d24: Pulling fs layer
+d2fa770575f8: Pulling fs layer
+c2e82dc171cf: Waiting
+6173fd1b5c8a: Waiting
+f82b85998d24: Waiting
+d2fa770575f8: Waiting
+06ed26fef908: Pulling fs layer
+06ed26fef908: Waiting
+847041143ee5: Pulling fs layer
+a6b8357e13c6: Pulling fs layer
+d837809709c4: Pulling fs layer
+7353b0e32859: Pulling fs layer
+847041143ee5: Waiting
+a6b8357e13c6: Waiting
+7353b0e32859: Waiting
+d837809709c4: Waiting
+a74b6126a333: Verifying Checksum
+a74b6126a333: Download complete
+a74b6126a333: Download complete
+d207cc66da44: Download complete
+d207cc66da44: Download complete
+d207cc66da44: Pull complete
+d207cc66da44: Pull complete
+851bb1368529: 851bb1368529: Verifying Checksum
+Verifying Checksum
+851bb1368529: 851bb1368529: Download complete
+Download complete
+90b04f7874fd: Verifying Checksum
+90b04f7874fd: Download complete
+90b04f7874fd: Verifying Checksum
+90b04f7874fd: Download complete
+a0c6b4cb481d: a0c6b4cb481d: Verifying Checksum
+Verifying Checksum
+a0c6b4cb481d: a0c6b4cb481d: Download complete
+Download complete
+abe1fea37542: Verifying Checksum
+abe1fea37542: Download complete
+abe1fea37542: Pull complete
+15d8343a97c7: Verifying Checksum
+15d8343a97c7: Download complete
+15d8343a97c7: Pull complete
+7c5b4bbef033: Verifying Checksum
+7c5b4bbef033: Download complete
+7c5b4bbef033: Pull complete
+13e30b69e389: Verifying Checksum
+13e30b69e389: Download complete
+13e30b69e389: Pull complete
+3d84f27ee395: 3d84f27ee395: Verifying Checksum
+Verifying Checksum
+3d84f27ee395: Download complete
+3d84f27ee395: Download complete
+eb09864e43e6: Verifying Checksum
+eb09864e43e6: Download complete
+3d84f27ee395: 3d84f27ee395: Pull complete
+Pull complete
+a74b6126a333: a74b6126a333: Pull complete
+Pull complete
+1095d7775278: Verifying Checksum
+1095d7775278: Download complete
+cc20e1fa4454: Download complete
+cc20e1fa4454: Pull complete
+eb09864e43e6: Pull complete
+1095d7775278: Pull complete
+7bb3f3185069: Verifying Checksum
+7bb3f3185069: Download complete
+c2e82dc171cf: Verifying Checksum
+c2e82dc171cf: Download complete
+c2e82dc171cf: Pull complete
+6173fd1b5c8a: Download complete
+6173fd1b5c8a: Pull complete
+f82b85998d24: Verifying Checksum
+f82b85998d24: Download complete
+fe2b0116b821: fe2b0116b821: Retrying in 5 seconds
+Retrying in 5 seconds
+f82b85998d24: Pull complete
+fe2b0116b821: fe2b0116b821: Retrying in 4 seconds
+Retrying in 4 seconds
+fe2b0116b821: fe2b0116b821: Retrying in 3 seconds
+Retrying in 3 seconds
+fe2b0116b821: fe2b0116b821: Retrying in 2 seconds
+Retrying in 2 seconds
+fe2b0116b821: fe2b0116b821: Retrying in 1 second
+Retrying in 1 second
+fe2b0116b821: fe2b0116b821: Retrying in 10 seconds
+Retrying in 10 seconds
+fe2b0116b821: fe2b0116b821: Retrying in 9 seconds
+Retrying in 9 seconds
+fe2b0116b821: fe2b0116b821: Retrying in 8 seconds
+Retrying in 8 seconds
+fe2b0116b821: fe2b0116b821: Retrying in 7 seconds
+Retrying in 7 seconds
+fe2b0116b821: Retrying in 6 seconds
+fe2b0116b821: Retrying in 6 seconds
+fe2b0116b821: fe2b0116b821: Retrying in 5 seconds
+Retrying in 5 seconds
+fe2b0116b821: fe2b0116b821: Retrying in 4 seconds
+Retrying in 4 seconds
+fe2b0116b821: fe2b0116b821: Retrying in 3 seconds
+Retrying in 3 seconds
+fe2b0116b821: Retrying in 2 seconds
+fe2b0116b821: Retrying in 2 seconds
+fe2b0116b821: fe2b0116b821: Retrying in 1 second
+Retrying in 1 second

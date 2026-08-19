@@ -1,0 +1,15 @@
+# Terminal-Bench 评测用 adapter 配置。
+# 用法:cp config.eval.yaml config.eval.local.yaml,把 api_key 换成真实 key。
+# config.eval.local.yaml 已被 .gitignore,真实 key 不要写进本文件。
+# 字段含义见 ../config.example.yaml 与 internal/config/config.go。
+provider: openai_compatible
+base_url: https://api.deepseek.com
+api_key: FILL_ME
+model: deepseek-v4-flash
+server:
+  host: 127.0.0.1
+  port: 18889
+memory:
+  # 评测必须关记忆:协议不支持按请求传 base_dir,开着会让多任务共享
+  # 项目记忆(工作目录 /app 相同 → 同一 project key),造成跨任务污染。
+  enabled: false

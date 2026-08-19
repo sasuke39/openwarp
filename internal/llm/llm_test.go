@@ -63,3 +63,64 @@ func TestExtractToolCalls_UsesStableProviderIndex(t *testing.T) {
 		t.Fatalf("unexpected second tool call: %+v", toolCalls[1])
 	}
 }
+
+// CollectStreamResult 应记录流中最后一个非空 finish_reason。
+func TestCollectStreamResult_CapturesFinishReason(t *testing.T) {
+	// 正常流:中间 chunk 无 finish_reason,末尾 chunk finish_reason=length
+	chunks := []openai.ChatCompletionChunk{
+		{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{
+						Content: "partial",
+					},
+				},
+			},
+		},
+		{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					FinishReason: "length",
+				},
+			},
+		},
+	}
+	result := CollectStreamResult(chunks)
+	if result.Text != "partial" {
+		t.Fatalf("expected text 'partial', got %q", result.Text)
+	}
+	if result.FinishReason != "length" {
+		t.Fatalf("expected finish_reason 'length', got %q", result.FinishReason)
+	}
+
+	// 无 finish_reason 时应为空
+	emptyChunks := []openai.ChatCompletionChunk{
+		{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta: openai.ChatCompletionChunkChoiceDelta{Content: "x"},
+				},
+			},
+		},
+	}
+	emptyResult := CollectStreamResult(emptyChunks)
+	if emptyResult.FinishReason != "" {
+		t.Fatalf("expected empty finish_reason, got %q", emptyResult.FinishReason)
+	}
+
+	// stop finish_reason 也应被记录
+	stopChunks := []openai.ChatCompletionChunk{
+		{
+			Choices: []openai.ChatCompletionChunkChoice{
+				{
+					Delta:       openai.ChatCompletionChunkChoiceDelta{Content: "done"},
+					FinishReason: "stop",
+				},
+			},
+		},
+	}
+	stopResult := CollectStreamResult(stopChunks)
+	if stopResult.FinishReason != "stop" {
+		t.Fatalf("expected finish_reason 'stop', got %q", stopResult.FinishReason)
+	}
+}

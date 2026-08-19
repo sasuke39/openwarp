@@ -1,0 +1,11 @@
+# 无 key 全链路 smoke 用:adapter 指向本机 mock LLM(tb_client/mock_llm.py)。
+# api_key 是占位符,mock 不校验;不含任何真实凭据,可提交。
+provider: openai_compatible
+base_url: http://127.0.0.1:18999
+api_key: mock-key
+model: mock-model
+server:
+  host: 127.0.0.1
+  port: 18889
+memory:
+  enabled: false

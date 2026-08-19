@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+# 本地真实配置(含 api_key),禁止提交
+config.eval.local.yaml
+# adapter 以本目录配置启动时产生的运行期文件
+conversations.json
+warplocal.log
+memory/
+# harbor 输出
+jobs/

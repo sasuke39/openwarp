@@ -1,0 +1,26 @@
+version = "1.0"
+
+[task]
+name = "local/hello-warp-local"
+description = "离线 smoke 任务:在容器里创建 /work/hello.txt,验证 warp-local-adapter 评测链路"
+keywords = [ "smoke", ]
+
+[metadata]
+difficulty = "easy"
+category = "smoke"
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 120.0
+docker_image = "ubuntu:22.04"
+workdir = "/work"
+cpus = 1
+memory_mb = 512
+storage_mb = 1024
+gpus = 0
+allow_internet = true

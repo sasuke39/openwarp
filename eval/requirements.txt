@@ -1,0 +1,4 @@
+# gencode 由 grpcio-tools 1.71(protoc 5.29)生成,运行时需 >=5.29
+protobuf>=5.29,<6
+grpcio-tools>=1.71,<2
+requests>=2.31

@@ -20,3 +20,11 @@ docs/.vitepress/dist/
 
 # Go
 coverage.out
+
+# Harbor eval artifacts
+jobs/
+
+# Local evaluation runs may contain provider credentials.
+eval/config.run-*.yaml
+eval/config.eval.nothink.yaml
+eval/mem/

@@ -3,12 +3,14 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net/http"
+	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
-	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"github.com/sasuke39/open-warp/internal/config"
 )
@@ -25,15 +27,37 @@ type StreamResult struct {
 	ReasoningContent string
 	ToolCalls        []ToolCall
 	IsToolCall       bool
+	// FinishReason 记录流中出现的最后一个非空 finish_reason(如 "stop"、
+	// "length"、"tool_calls")。调用方用它区分"推理耗尽输出预算"(length)
+	// 与普通空响应。
+	FinishReason string
 }
 
 type Client struct {
 	client *openai.Client
 	model  string
 	tools  []openai.ChatCompletionToolParam
+	// maxTokens caps completion output when > 0; see config.Config.MaxTokens.
+	maxTokens int
+	// thinkingDisabled disables model reasoning when true.
+	thinkingDisabled bool
+	// streamStallTimeout is the watchdog gap limit for streaming calls.
+	// Defaults to DefaultStreamStallTimeout; override in tests via
+	// SetStreamStallTimeout.
+	streamStallTimeout time.Duration
 }
 
 func NewClient(cfg *config.Config) *Client {
+	return newClient(cfg, nil)
+}
+
+// NewClientWithHTTPClient creates a client with a caller-provided HTTP client.
+// This is primarily intended for integration tests that need to mock the LLM API.
+func NewClientWithHTTPClient(cfg *config.Config, httpClient *http.Client) *Client {
+	return newClient(cfg, httpClient)
+}
+
+func newClient(cfg *config.Config, httpClient *http.Client) *Client {
 	opts := []option.RequestOption{
 		option.WithAPIKey(cfg.APIKey),
 	}
@@ -42,6 +66,9 @@ func NewClient(cfg *config.Config) *Client {
 		baseURL = "https://api.openai.com/v1"
 	}
 	opts = append(opts, option.WithBaseURL(baseURL))
+	if httpClient != nil {
+		opts = append(opts, option.WithHTTPClient(httpClient))
+	}
 	log.Printf("[LLM] NewClient: base_url=%s model=%s key_len=%d", baseURL, cfg.Model, len(cfg.APIKey))
 
 	client := openai.NewClient(opts...)
@@ -300,26 +327,135 @@ func NewClient(cfg *config.Config) *Client {
 				},
 			},
 		},
+		{
+			// update_task_list 是服务端执行的规划工具:adapter 校验后把任务
+			// 列表存进会话内存状态,不转发给客户端执行。每轮请求时把当前
+			// 任务进度注入 system prompt 尾部(见 cmd/server/tasklist.go)。
+			Function: shared.FunctionDefinitionParam{
+				Name:        "update_task_list",
+				Description: param.NewOpt("Update the task list for this work session. Use this to plan your approach, track progress, and stay focused. Call it:\n" +
+					"- At the start of any non-trivial task to outline your steps\n" +
+					"- After completing each step to mark it done and move to the next\n" +
+					"- When you realize your plan needs to change\n\n" +
+					"Rules:\n" +
+					"- Only one task can be in_progress at a time\n" +
+					"- Always pass the complete list (replaces previous state)\n" +
+					"- Keep tasks concrete and actionable\n" +
+					"- When all tasks are completed, you may finish your response"),
+				Parameters: shared.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"tasks": map[string]any{
+							"type":        "array",
+							"description": "Complete task list, replacing any previous list. Each task must have a unique id.",
+							"items": map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"id": map[string]any{
+										"type":        "string",
+										"description": "Unique task identifier (e.g. 'step-1', 'build', 'test')",
+									},
+									"content": map[string]any{
+										"type":        "string",
+										"description": "What this task does, one sentence",
+									},
+									"status": map[string]any{
+										"type":        "string",
+										"enum":        []string{"pending", "in_progress", "completed", "cancelled"},
+										"description": "pending=not started, in_progress=currently working on, completed=done, cancelled=abandoned",
+									},
+									"priority": map[string]any{
+										"type":        "string",
+										"enum":        []string{"high", "medium", "low"},
+										"description": "high=must do, medium=should do, low=nice to have",
+									},
+								},
+								"required": []string{"id", "content", "status"},
+							},
+						},
+					},
+					"required": []string{"tasks"},
+				},
+			},
+		},
 	}
 
 	return &Client{
-		client: &client,
-		model:  cfg.Model,
-		tools:  tools,
+		client:             &client,
+		model:              cfg.Model,
+		tools:              tools,
+		maxTokens:          cfg.MaxTokens,
+		thinkingDisabled:   cfg.ThinkingDisabled,
+		streamStallTimeout: DefaultStreamStallTimeout,
 	}
 }
 
-func (c *Client) StreamChat(ctx context.Context, systemPrompt string, history []openai.ChatCompletionMessageParamUnion) *ssestream.Stream[openai.ChatCompletionChunk] {
+// SetStreamStallTimeout overrides the watchdog stall timeout for streaming
+// calls. Primarily intended for tests; production code should keep
+// DefaultStreamStallTimeout.
+func (c *Client) SetStreamStallTimeout(d time.Duration) {
+	c.streamStallTimeout = d
+}
+
+func (c *Client) StreamChat(ctx context.Context, systemPrompt string, history []openai.ChatCompletionMessageParamUnion) *WatchdogStream {
 	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(history)+1)
 	msgs = append(msgs, openai.SystemMessage(systemPrompt))
 	msgs = append(msgs, history...)
 
 	log.Printf("[LLM] StreamChat: model=%s msg_count=%d tools=%d", c.model, len(msgs), len(c.tools))
-	return c.client.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
+	// Child context so the watchdog can abort a stalled HTTP request without
+	// cancelling the caller's request context.
+	streamCtx, cancel := context.WithCancel(ctx)
+	params := openai.ChatCompletionNewParams{
 		Model:    openai.ChatModel(c.model),
 		Messages: msgs,
 		Tools:    c.tools,
-	})
+	}
+	if c.maxTokens > 0 {
+		params.MaxTokens = openai.Int(int64(c.maxTokens))
+	}
+	// 火山/GLM 等支持 thinking 参数的提供商:关闭推理可防止推理吃光输出预算。
+	// 用 WithJSONSet 注入,不依赖 SDK 暴露该字段。
+	var extraOpts []option.RequestOption
+	if c.thinkingDisabled {
+		extraOpts = append(extraOpts, option.WithJSONSet("thinking", map[string]string{"type": "disabled"}))
+		log.Printf("[LLM] thinking=disabled")
+	}
+	inner := c.client.Chat.Completions.NewStreaming(streamCtx, params, extraOpts...)
+	return newWatchdogStream(inner, cancel, c.streamStallTimeout)
+}
+
+// CompleteText sends a non-streaming, no-tools completion request and returns
+// the assistant text. Used by memory extractors that must not call tools.
+func (c *Client) CompleteText(ctx context.Context, systemPrompt string, history []openai.ChatCompletionMessageParamUnion) (string, error) {
+	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(history)+1)
+	msgs = append(msgs, openai.SystemMessage(systemPrompt))
+	msgs = append(msgs, history...)
+
+	log.Printf("[LLM] CompleteText: model=%s msg_count=%d (no tools)", c.model, len(msgs))
+	params := openai.ChatCompletionNewParams{
+		Model:    openai.ChatModel(c.model),
+		Messages: msgs,
+	}
+	if c.maxTokens > 0 {
+		params.MaxTokens = openai.Int(int64(c.maxTokens))
+	}
+	var extraOpts []option.RequestOption
+	if c.thinkingDisabled {
+		extraOpts = append(extraOpts, option.WithJSONSet("thinking", map[string]string{"type": "disabled"}))
+	}
+	resp, err := c.client.Chat.Completions.New(ctx, params, extraOpts...)
+	if err != nil {
+		return "", fmt.Errorf("CompleteText: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("CompleteText: empty response")
+	}
+	text := resp.Choices[0].Message.Content
+	if text == "" {
+		return "", fmt.Errorf("CompleteText: empty text in response")
+	}
+	return text, nil
 }
 
 func MakeUserMessage(content string) openai.ChatCompletionMessageParamUnion {
@@ -440,6 +576,9 @@ func CollectStreamResult(chunks []openai.ChatCompletionChunk) StreamResult {
 	for _, chunk := range chunks {
 		for _, choice := range chunk.Choices {
 			result.Text += choice.Delta.Content
+			if choice.FinishReason != "" {
+				result.FinishReason = string(choice.FinishReason)
+			}
 			// DeepSeek reasoning models return reasoning_content in delta.
 			// Try ExtraFields first, then fall back to RawJSON parsing.
 			if f, ok := choice.Delta.JSON.ExtraFields["reasoning_content"]; ok && f.Valid() {

@@ -12,12 +12,60 @@ type Config struct {
 	BaseURL  string       `yaml:"base_url"`
 	APIKey   string       `yaml:"api_key"`
 	Model    string       `yaml:"model"`
-	Server   ServerConfig `yaml:"server"`
+	// MaxTokens caps completion output (reasoning included on thinking models).
+	// 0 means "do not send the parameter" and use the provider default.
+	// Some providers default to a small cap, which lets thinking models burn
+	// the whole budget on reasoning and return empty content
+	// (finish_reason=length). Set explicitly when using such models.
+	MaxTokens int `yaml:"max_tokens"`
+	// ThinkingDisabled turns off the model's internal reasoning/thinking when
+	// true and the provider supports it (e.g. GLM/DeepSeek thinking parameter).
+	// Reduces latency and prevents reasoning from consuming the output budget,
+	// at the cost of reasoning quality on hard problems.
+	ThinkingDisabled bool `yaml:"thinking_disabled"`
+	Server           ServerConfig `yaml:"server"`
+	Memory           MemoryConfig `yaml:"memory"`
 }
 
 type ServerConfig struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
+}
+
+type MemoryConfig struct {
+	Enabled          *bool  `yaml:"enabled"`
+	BaseDir          string `yaml:"base_dir"`
+	SessionEnabled   *bool  `yaml:"session_enabled"`
+	AutoEnabled      *bool  `yaml:"auto_enabled"`
+	MaxProjectMemory int    `yaml:"max_project_memories"`
+	StaleAfterHours  int    `yaml:"stale_after_hours"`
+	// ContextWindowTokens is the server-side base model context window used to
+	// derive memory compaction thresholds. It defaults to 32k tokens.
+	ContextWindowTokens int `yaml:"context_window_tokens"`
+}
+
+// IsEnabled returns whether memory is enabled, defaulting to true if not set.
+func (m *MemoryConfig) IsEnabled() bool {
+	if m.Enabled == nil {
+		return true
+	}
+	return *m.Enabled
+}
+
+// IsSessionEnabled returns whether session memory is enabled, defaulting to true if not set.
+func (m *MemoryConfig) IsSessionEnabled() bool {
+	if m.SessionEnabled == nil {
+		return true
+	}
+	return *m.SessionEnabled
+}
+
+// IsAutoEnabled returns whether auto-memory is enabled, defaulting to true if not set.
+func (m *MemoryConfig) IsAutoEnabled() bool {
+	if m.AutoEnabled == nil {
+		return true
+	}
+	return *m.AutoEnabled
 }
 
 func Default() *Config {
@@ -38,6 +86,15 @@ func ApplyDefaults(cfg *Config) *Config {
 	}
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 18888
+	}
+	if cfg.Memory.MaxProjectMemory == 0 {
+		cfg.Memory.MaxProjectMemory = 5
+	}
+	if cfg.Memory.StaleAfterHours == 0 {
+		cfg.Memory.StaleAfterHours = 24
+	}
+	if cfg.Memory.ContextWindowTokens == 0 {
+		cfg.Memory.ContextWindowTokens = 32000
 	}
 	return cfg
 }

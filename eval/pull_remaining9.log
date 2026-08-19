@@ -1,0 +1,23 @@
+alexgshaw/mteb-leaderboard:20251031: 7 层,共 8.82GB,12 连接
+alexgshaw/hf-model-inference:20251031: 6 层,共 6.19GB,12 连接
+  config 0/0MB 0.0MB/s
+  config 0/0MB 0.0MB/s
+  layer1/6 28/28MB 0.1MB/s
+  layer1/7 28/28MB 0.1MB/s
+  layer1/7 56/28MB 0.1MB/s
+  layer1/6 56/28MB 0.1MB/s
+  layer1/7 85/28MB 0.1MB/s
+  layer1/7 113/28MB 0.2MB/s
+  layer1/6 85/28MB 0.1MB/s
+  layer2/7 4/4MB 0.1MB/s
+  layer1/6 113/28MB 0.1MB/s
+  layer2/6 4/4MB 0.1MB/s
+  layer3/7 15/15MB 0.1MB/s
+  layer3/7 31/15MB 0.2MB/s
+  layer4/7 0/0MB 0.0MB/s
+  layer3/6 12/12MB 0.1MB/s
+  layer3/6 25/12MB 0.1MB/s
+  layer4/6 0/0MB 0.0MB/s
+  layer5/6 0/0MB 0.0MB/s
+  layer5/7 8/145MB 0.0MB/s
+  layer5/7 17/145MB 0.0MB/s

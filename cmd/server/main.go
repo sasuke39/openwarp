@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html"
@@ -24,6 +25,8 @@ import (
 	"github.com/sasuke39/open-warp/internal/agent"
 	"github.com/sasuke39/open-warp/internal/config"
 	"github.com/sasuke39/open-warp/internal/llm"
+	"github.com/sasuke39/open-warp/internal/memory"
+	"github.com/sasuke39/open-warp/internal/tools"
 
 	"github.com/openai/openai-go"
 	pb "github.com/sasuke39/open-warp/internal/proto"
@@ -43,6 +46,11 @@ type Conversation struct {
 	LastRequestID            string
 	LastRunID                string
 	LastLongRunningCommandID string
+	ProjectKey               string
+	// todoList 是 update_task_list 工具维护的任务清单。只存在于内存:
+	// 不写 history、不持久化,会话结束即消失。每轮请求前格式化成
+	// "## Current Task Progress" 追加到 system prompt 尾部。
+	todoList []TaskItem
 }
 
 type Server struct {
@@ -53,6 +61,7 @@ type Server struct {
 	configPath      string
 	persistencePath string
 	lastConfigError string
+	memoryStore     *memory.Store
 }
 
 type settingsStatus struct {
@@ -63,7 +72,7 @@ type settingsStatus struct {
 	Error         string   `json:"error,omitempty"`
 }
 
-const maxConversations = 30
+const maxConversations = 100
 
 var supportedTools = map[string]struct{}{
 	"read_files":                             {},
@@ -75,6 +84,9 @@ var supportedTools = map[string]struct{}{
 	"transfer_shell_command_control_to_user": {},
 	"apply_file_diffs":                       {},
 	"search_codebase":                        {},
+	// update_task_list 服务端执行,不转发客户端;列在这里是为了不被
+	// splitUnsupportedToolCalls 当成不支持的工具。
+	"update_task_list": {},
 }
 
 func NewServer(cfg *config.Config, configPath string) *Server {
@@ -86,6 +98,28 @@ func NewServer(cfg *config.Config, configPath string) *Server {
 	}
 	if err := server.loadConversations(); err != nil {
 		log.Printf("Failed to load persisted conversations: %v", err)
+	}
+	// Initialize memory store only when enabled.
+	if server.cfg.Memory.IsEnabled() {
+		memCfg := memory.Config{
+			BaseDir:          server.cfg.Memory.BaseDir,
+			StaleAfterHours:  server.cfg.Memory.StaleAfterHours,
+			SessionEnabled:   server.cfg.Memory.IsSessionEnabled(),
+			AutoEnabled:      server.cfg.Memory.IsAutoEnabled(),
+			MaxProjectMemory: server.cfg.Memory.MaxProjectMemory,
+		}
+		store, err := memory.NewStore(memCfg, configPath)
+		if err != nil {
+			log.Printf("[MEMORY] Failed to create store: %v", err)
+		} else {
+			if err := store.EnsureDirs(); err != nil {
+				log.Printf("[MEMORY] Failed to ensure dirs: %v", err)
+			}
+			server.memoryStore = store
+			log.Printf("[MEMORY] Store initialized at %s", store.BaseDir())
+		}
+	} else {
+		log.Printf("[MEMORY] Memory system is disabled by configuration")
 	}
 	return server
 }
@@ -179,7 +213,14 @@ func main() {
 	mux.HandleFunc("/settings", server.handleSettings)
 	mux.HandleFunc("/settings/status", server.handleSettingsStatus)
 	mux.HandleFunc("/settings/reload", server.handleSettingsReload)
+	mux.HandleFunc("/settings/config", server.handleSettingsConfig)
+	mux.HandleFunc("/settings/profiles", server.handleProfiles)
+	mux.HandleFunc("/settings/profiles/{name}", server.handleProfile)
+	mux.HandleFunc("/settings/profiles/{name}/activate", server.handleProfileActivate)
 	mux.HandleFunc("POST /agent/tasks/{task_id}/cancel", server.handleCancelTask)
+	mux.HandleFunc("/settings/memory/status", server.handleMemoryStatus)
+	mux.HandleFunc("POST /settings/memory/clear-session", server.handleMemoryClearSession)
+	mux.HandleFunc("POST /settings/memory/clear-project", server.handleMemoryClearProject)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	httpServer := &http.Server{
@@ -887,6 +928,7 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conv := s.getOrCreateConversation(convID)
+	conv.ProjectKey = s.resolveProjectKeyFromRequest(&req, convID)
 
 	// Extract user inputs from request
 	inputs := extractInputs(&req)
@@ -986,6 +1028,19 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 		conv.history = normalized
 	}
 
+	// Build memory-augmented system prompt and check compaction.
+	systemPrompt := agent.SystemPrompt
+	var historyForLLM []openai.ChatCompletionMessageParamUnion
+
+	if s.memoryStore != nil && s.cfg.Memory.IsEnabled() {
+		systemPrompt, historyForLLM = s.buildMemoryContext(conv, convID)
+	}
+	systemPrompt = agent.WithExecutionContext(systemPrompt, req.GetInput().GetContext())
+	managedSSHTarget, _ := agent.ManagedSSHTargetFromInput(req.GetInput().GetContext())
+	if historyForLLM == nil {
+		historyForLLM = conv.history
+	}
+
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
@@ -994,7 +1049,22 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 	s.runningTasks.Store(taskID, cancel)
 	defer s.runningTasks.Delete(taskID)
 
-	s.runAgentLoop(ctx, w, flusher, conv, requestID, taskID, isFollowUp || taskIDFromClient)
+	s.runAgentLoop(ctx, w, flusher, conv, requestID, taskID, isFollowUp || taskIDFromClient, systemPrompt, historyForLLM, managedSSHTarget)
+
+	// After the agent loop, check if session memory should be updated.
+	if s.memoryStore != nil && s.cfg.Memory.IsEnabled() && s.cfg.Memory.IsSessionEnabled() {
+		s.maybeUpdateSessionMemory(conv, convID)
+	}
+	if s.memoryStore != nil && s.cfg.Memory.IsEnabled() && s.cfg.Memory.IsAutoEnabled() {
+		stats := memory.SessionStats{
+			MessageCount:             len(conv.history),
+			HistoryChars:             estimateHistoryChars(conv.history),
+			ToolCallCount:            countToolCalls(conv.history),
+			LastAssistantHasToolCall: lastAssistantHasToolCall(conv.history),
+		}
+		s.maybeUpdateProjectMemory(conv, conv.ProjectKey, stats)
+	}
+
 	conv.mu.Unlock()
 	if err := s.saveConversations(); err != nil {
 		log.Printf("Failed to persist conversations: %v", err)
@@ -1131,37 +1201,47 @@ func (s *Server) loadConversations() error {
 }
 
 func (s *Server) saveConversations() error {
-	s.mu.RLock()
-	ids := make([]string, 0, len(s.conversations))
-	for id := range s.conversations {
-		ids = append(ids, id)
+	// 只持短读锁拷贝会话快照。此前版本在 RLock 内逐个 conv.mu.Lock(),
+	// 而 handleAgentRequest 在整个 agent 循环期间(可能数分钟)持有 conv.mu:
+	// 一旦有新会话在 s.mu.Lock 上排队(Go RWMutex 写者优先),所有 RLock
+	// 全部堵死,整个 server 形成 convoy 死锁。
+	type convEntry struct {
+		id   string
+		conv *Conversation
 	}
-	sort.Strings(ids)
+	s.mu.RLock()
+	entries := make([]convEntry, 0, len(s.conversations))
+	for id, conv := range s.conversations {
+		entries = append(entries, convEntry{id, conv})
+	}
+	s.mu.RUnlock()
+	sort.Slice(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
 
-	persisted := make(map[string]persistedConversation, len(ids))
-	for _, id := range ids {
-		conv := s.conversations[id]
-		conv.mu.Lock()
-		history, err := serializeHistory(conv.history)
-		if err != nil {
-			conv.mu.Unlock()
-			s.mu.RUnlock()
-			return fmt.Errorf("serialize conversation %s: %w", id, err)
+	persisted := make(map[string]persistedConversation, len(entries))
+	for _, e := range entries {
+		// 正在跑 agent 循环的会话本轮跳过不存(下一次保存会覆盖),
+		// 绝不能在这里阻塞等待,否则又会把存盘路径和活跃会话耦合成死锁。
+		if !e.conv.mu.TryLock() {
+			continue
 		}
-		createdAt := conv.CreatedAt
+		history, err := serializeHistory(e.conv.history)
+		if err != nil {
+			e.conv.mu.Unlock()
+			return fmt.Errorf("serialize conversation %s: %w", e.id, err)
+		}
+		createdAt := e.conv.CreatedAt
 		if createdAt.IsZero() {
 			createdAt = time.Now().UTC()
 		}
-		persisted[id] = persistedConversation{
+		persisted[e.id] = persistedConversation{
 			History:                  history,
-			LastRequestID:            conv.LastRequestID,
-			LastRunID:                conv.LastRunID,
-			LastLongRunningCommandID: conv.LastLongRunningCommandID,
+			LastRequestID:            e.conv.LastRequestID,
+			LastRunID:                e.conv.LastRunID,
+			LastLongRunningCommandID: e.conv.LastLongRunningCommandID,
 			CreatedAt:                createdAt,
 		}
-		conv.mu.Unlock()
+		e.conv.mu.Unlock()
 	}
-	s.mu.RUnlock()
 
 	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
@@ -1476,7 +1556,12 @@ func formatFileContent(file *pb.FileContent) string {
 	return header + "\n" + content
 }
 
-func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flusher, conv *Conversation, requestID, taskID string, isFollowUp bool) {
+// reasoningExhaustedNudge 是"推理耗尽输出预算"型空响应(finish_reason=
+// length 且 content 为空)重试时追加在请求历史尾部的用户消息。它只进入
+// 发给 LLM 的请求历史,不写进 conv.history(见 runAgentLoop 内注释)。
+const reasoningExhaustedNudge = "Your previous response was cut off because it exceeded the output token limit. Skip the detailed analysis and directly provide your best answer or the next tool call. Be concise."
+
+func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flusher, conv *Conversation, requestID, taskID string, isFollowUp bool, systemPrompt string, historyForLLM []openai.ChatCompletionMessageParamUnion, managedSSHTarget agent.ManagedSSHTarget) {
 	// Only send CreateTask on the first request — it upgrades the client's
 	// optimistic task. On follow-up requests (tool results), the task already exists.
 	if !isFollowUp {
@@ -1484,6 +1569,10 @@ func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flu
 	}
 
 	const maxLoops = 5
+	// maxStreamRetries bounds how many times one loop iteration re-issues the
+	// same StreamChat request after a watchdog stall or an empty response, so
+	// each loop iteration gets 1 + maxStreamRetries chances in total.
+	const maxStreamRetries = 2
 	for i := 0; i < maxLoops; i++ {
 		// Check if client disconnected before starting a new loop iteration.
 		if ctx.Err() != nil {
@@ -1491,76 +1580,147 @@ func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flu
 			return
 		}
 
-		log.Printf("[LLM] loop=%d starting stream, task_id=%s history_len=%d", i, taskID, len(conv.history))
-		stream := conv.client.StreamChat(ctx, agent.SystemPrompt, conv.history)
+		// 每轮请求前把当前任务清单注入 system prompt 尾部(WithExecutionContext
+		// 已在调用方拼好,这里再往尾巴上加)。空列表时 formatTaskProgress 返回
+		// 空串,不注入。todoList 只进本轮请求的 system prompt,不写 conv.history。
+		effectiveSystemPrompt := systemPrompt + formatTaskProgress(conv.todoList)
+
+		log.Printf("[LLM] loop=%d starting stream, task_id=%s history_len=%d", i, taskID, len(historyForLLM))
 
 		var chunks []openai.ChatCompletionChunk
-		chunkCount := 0
-		textChars := 0
+		var result llm.StreamResult
+		var chunkCount int
 
-		// Fixed message ID so AppendToMessageContent can target the same message
-		outputMsgID := uuid.New().String()
-		var firstSent bool
+		// Retry loop for this iteration's completion. On stall/empty-response
+		// we discard the partial chunks and re-request the whole completion
+		// with the identical systemPrompt/history. Trade-off: text deltas from
+		// the failed attempt were already streamed to the client and are NOT
+		// rolled back — the retried attempt streams into a fresh message ID,
+		// so the client may briefly show a duplicated prefix. Re-fetching the
+		// whole completion is far simpler and safer than trying to resume a
+		// half-broken SSE stream mid-way.
+		//
+		// requestHistory 是本轮迭代的请求历史,初始等于 historyForLLM。
+		// 当检测到"推理耗尽输出预算"型空响应(finish_reason=length)时,会在
+		// requestHistory 尾部追加一条 nudge 再重试。nudge 只存在于这个局部
+		// 变量里:conv.history 的追加发生在重试循环之外(assistant 消息或
+		// tool_call 消息),因此 nudge 永远不会写入正式对话历史;即使重试
+		// 成功入库,历史里也看不到这条提示。
+		requestHistory := historyForLLM
+		nudgeAdded := false
+		for attempt := 0; ; {
+			stream := conv.client.StreamChat(ctx, effectiveSystemPrompt, requestHistory)
 
-		for stream.Next() {
-			// Check for client disconnect. Without this, a dead connection
-			// stays in CLOSE_WAIT until the handler unwinds.
-			if ctx.Err() != nil {
-				log.Printf("[LLM] loop=%d client disconnected mid-stream, aborting", i)
+			chunks = nil
+			chunkCount = 0
+			textChars := 0
+
+			// Fixed message ID so AppendToMessageContent can target the same message
+			outputMsgID := uuid.New().String()
+			var firstSent bool
+
+			for stream.Next() {
+				// Check for client disconnect. Without this, a dead connection
+				// stays in CLOSE_WAIT until the handler unwinds.
+				if ctx.Err() != nil {
+					log.Printf("[LLM] loop=%d client disconnected mid-stream, aborting", i)
+					return
+				}
+
+				chunk := stream.Current()
+				chunks = append(chunks, chunk)
+				chunkCount++
+
+				for _, choice := range chunk.Choices {
+					// Debug: log raw delta JSON on early chunks to inspect reasoning_content
+					if chunkCount <= 3 {
+						rawDelta := choice.Delta.RawJSON()
+						if len(rawDelta) > 500 {
+							rawDelta = rawDelta[:500] + "..."
+						}
+						log.Printf("[LLM] loop=%d chunk=%d delta_raw=%s", i, chunkCount, rawDelta)
+					}
+					if choice.Delta.Content != "" {
+						textChars += len(choice.Delta.Content)
+						if !firstSent {
+							s.sendFirstTextChunk(w, flusher, taskID, requestID, outputMsgID, choice.Delta.Content)
+							firstSent = true
+						} else {
+							s.sendAppendText(w, flusher, taskID, outputMsgID, choice.Delta.Content)
+						}
+					}
+				}
+			}
+
+			log.Printf("[LLM] loop=%d stream done: chunks=%d text_chars=%d", i, chunkCount, textChars)
+
+			if err := stream.Err(); err != nil {
+				if errors.Is(err, llm.ErrStreamStall) && ctx.Err() == nil {
+					if attempt < maxStreamRetries {
+						attempt++
+						log.Printf("[LLM-WATCHDOG] loop=%d stream stalled after %d chunks, retrying same request (%d/%d)", i, chunkCount, attempt, maxStreamRetries)
+						continue
+					}
+					log.Printf("[LLM-WATCHDOG] loop=%d stream stalled after %d chunks, retries exhausted", i, chunkCount)
+				}
+				log.Printf("[LLM] loop=%d STREAM ERROR: %v", i, err)
+				// If the client disconnected, don't try to write an error event —
+				// the connection is already closed.
+				if ctx.Err() != nil {
+					log.Printf("[LLM] loop=%d context also cancelled, skipping error event", i)
+					return
+				}
+				s.sendFinishError(w, flusher, err.Error())
 				return
 			}
 
-			chunk := stream.Current()
-			chunks = append(chunks, chunk)
-			chunkCount++
+			result = llm.CollectStreamResult(chunks)
+			rcPreview := result.ReasoningContent
+			if len(rcPreview) > 200 {
+				rcPreview = rcPreview[:200] + "..."
+			}
+			log.Printf("[LLM] loop=%d result: text_len=%d reasoning_len=%d is_tool=%v reasoning_preview=%q", i, len(result.Text), len(result.ReasoningContent), result.IsToolCall, rcPreview)
 
-			for _, choice := range chunk.Choices {
-				// Debug: log raw delta JSON on early chunks to inspect reasoning_content
-				if chunkCount <= 3 {
-					rawDelta := choice.Delta.RawJSON()
-					if len(rawDelta) > 500 {
-						rawDelta = rawDelta[:500] + "..."
-					}
-					log.Printf("[LLM] loop=%d chunk=%d delta_raw=%s", i, chunkCount, rawDelta)
+			if len(chunks) > 0 {
+				last := chunks[len(chunks)-1]
+				for _, choice := range last.Choices {
+					log.Printf("[LLM] loop=%d finish_reason=%q content_len=%d", i, choice.FinishReason, len(choice.Delta.Content))
 				}
-				if choice.Delta.Content != "" {
-					textChars += len(choice.Delta.Content)
-					if !firstSent {
-						s.sendFirstTextChunk(w, flusher, taskID, requestID, outputMsgID, choice.Delta.Content)
-						firstSent = true
+			}
+
+			// Empty non-tool responses (observed after long DeepSeek reasoning)
+			// are retried like stalls instead of failing the task immediately.
+			if result.Text == "" && !result.IsToolCall && ctx.Err() == nil {
+				// finish_reason=length 说明推理模型把输出预算(max_tokens)
+				// 全部耗在推理上,content 被截断为空。原样重试大概率再次
+				// 长推理、再次撞顶(评测实锤白烧预算),因此改为在请求历史
+				// 尾部追加 nudge,要求模型跳过逐步分析直接作答。
+				reasoningExhausted := result.FinishReason == "length"
+				if attempt < maxStreamRetries {
+					attempt++
+					if reasoningExhausted {
+						log.Printf("[LLM-WATCHDOG] loop=%d reasoning exhausted output budget (finish=length, reasoning_len=%d, chunks=%d), retrying with brevity nudge (%d/%d)", i, len(result.ReasoningContent), chunkCount, attempt, maxStreamRetries)
+						if !nudgeAdded {
+							// 拷贝一份新切片再追加,避免共享底层数组影响
+							// historyForLLM;nudge 只进本次及后续重试请求。
+							nudged := make([]openai.ChatCompletionMessageParamUnion, 0, len(requestHistory)+1)
+							nudged = append(nudged, requestHistory...)
+							nudged = append(nudged, llm.MakeUserMessage(reasoningExhaustedNudge))
+							requestHistory = nudged
+							nudgeAdded = true
+						}
 					} else {
-						s.sendAppendText(w, flusher, taskID, outputMsgID, choice.Delta.Content)
+						log.Printf("[LLM-WATCHDOG] loop=%d empty non-tool response (chunks=%d), retrying same request (%d/%d)", i, chunkCount, attempt, maxStreamRetries)
 					}
+					continue
+				}
+				if reasoningExhausted {
+					log.Printf("[LLM-WATCHDOG] loop=%d reasoning exhausted output budget (finish=length, reasoning_len=%d, chunks=%d), retries exhausted", i, len(result.ReasoningContent), chunkCount)
+				} else {
+					log.Printf("[LLM-WATCHDOG] loop=%d empty non-tool response (chunks=%d), retries exhausted", i, chunkCount)
 				}
 			}
-		}
-
-		log.Printf("[LLM] loop=%d stream done: chunks=%d text_chars=%d", i, chunkCount, textChars)
-
-		if err := stream.Err(); err != nil {
-			log.Printf("[LLM] loop=%d STREAM ERROR: %v", i, err)
-			// If the client disconnected, don't try to write an error event —
-			// the connection is already closed.
-			if ctx.Err() != nil {
-				log.Printf("[LLM] loop=%d context also cancelled, skipping error event", i)
-				return
-			}
-			s.sendFinishError(w, flusher, err.Error())
-			return
-		}
-
-		result := llm.CollectStreamResult(chunks)
-		rcPreview := result.ReasoningContent
-		if len(rcPreview) > 200 {
-			rcPreview = rcPreview[:200] + "..."
-		}
-		log.Printf("[LLM] loop=%d result: text_len=%d reasoning_len=%d is_tool=%v reasoning_preview=%q", i, len(result.Text), len(result.ReasoningContent), result.IsToolCall, rcPreview)
-
-		if len(chunks) > 0 {
-			last := chunks[len(chunks)-1]
-			for _, choice := range last.Choices {
-				log.Printf("[LLM] loop=%d finish_reason=%q content_len=%d", i, choice.FinishReason, len(choice.Delta.Content))
-			}
+			break
 		}
 
 		// Check if LLM wants to call tools
@@ -1568,13 +1728,73 @@ func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flu
 			for j, tc := range result.ToolCalls {
 				log.Printf("[LLM] loop=%d tool_call[%d] name=%s id=%s args=%s", i, j, tc.Name, tc.ID, string(tc.Args))
 			}
-			if err := validateSupportedToolCalls(result.ToolCalls); err != nil {
-				log.Printf("[LLM] loop=%d unsupported tool call: %v", i, err)
-				s.sendFinishError(w, flusher, err.Error())
-				return
+			supportedCalls, unsupportedResults := splitUnsupportedToolCalls(result.ToolCalls)
+			for _, dr := range unsupportedResults {
+				log.Printf("[LLM] loop=%d unsupported tool call, feeding synthetic result: %s", i, dr.Message)
 			}
+			// update_task_list 在服务端执行:校验 -> 更新 conv.todoList -> 生成
+			// 工具结果,不转发给客户端。先于所有客户端工具处理——它和读工具并行
+			// 无冲突,但必须赶在写工具生效前更新计划状态。
+			serverCalls, clientCalls := splitServerSideToolCalls(supportedCalls)
+			serverResults := make([]serverToolResult, 0, len(serverCalls))
+			for _, tc := range serverCalls {
+				prevTodoList := conv.todoList
+				msg := executeUpdateTaskList(conv, tc)
+				serverResults = append(serverResults, serverToolResult{ID: tc.ID, Message: msg})
+				log.Printf("[LLM] loop=%d %s executed server-side: %s", i, tc.Name, msg)
+				// 校验通过且状态变化时,推 todo 状态给客户端刷新 UI 面板
+				if !taskListEqual(prevTodoList, conv.todoList) {
+					s.sendTodoListUpdate(w, flusher, taskID, prevTodoList, conv.todoList)
+				}
+			}
+			sshAllowed, sshDeniedResults := enforceManagedSSHPolicy(
+				clientCalls,
+				managedSSHTarget,
+				conv.LastLongRunningCommandID,
+				conv.history,
+			)
+			// Enforce path policy on file-write tool calls that passed the SSH guard.
+			allowed, deniedResults := s.enforcePathPolicy(sshAllowed)
+			// Always append the full assistant tool_call message with ALL IDs first
+			// to preserve tool_call/tool_result pairing.
 			conv.history = append(conv.history, llm.MakeAssistantToolCallMessage(result.ToolCalls, result.ReasoningContent))
-			if err := s.sendToolCalls(w, flusher, conv, taskID, result.ToolCalls); err != nil {
+			if len(allowed) == 0 && len(serverResults)+len(deniedResults)+len(sshDeniedResults)+len(unsupportedResults) > 0 {
+				// Nothing to forward to the client (all calls were server-side or
+				// denied). Append results for all and continue the loop.
+				for _, sr := range serverResults {
+					conv.history = append(conv.history, llm.MakeToolResultMessage(sr.ID, sr.Message))
+				}
+				for _, dr := range unsupportedResults {
+					conv.history = append(conv.history, llm.MakeToolResultMessage(dr.ID, dr.Message))
+				}
+				for _, dr := range sshDeniedResults {
+					conv.history = append(conv.history, llm.MakeToolResultMessage(dr.ID, dr.Message))
+				}
+				for _, dr := range deniedResults {
+					conv.history = append(conv.history, llm.MakeToolResultMessage(dr.ID, dr.Message))
+				}
+				log.Printf("[LLM] loop=%d no client-bound tool calls (server_results=%d denied=%d), continuing loop", i, len(serverResults), len(deniedResults)+len(sshDeniedResults)+len(unsupportedResults))
+				historyForLLM = conv.history
+				continue
+			}
+			for _, sr := range serverResults {
+				conv.history = append(conv.history, llm.MakeToolResultMessage(sr.ID, sr.Message))
+			}
+			for _, dr := range unsupportedResults {
+				conv.history = append(conv.history, llm.MakeToolResultMessage(dr.ID, dr.Message))
+			}
+			for _, dr := range sshDeniedResults {
+				conv.history = append(conv.history, llm.MakeToolResultMessage(dr.ID, dr.Message))
+				log.Printf("[SSH-GUARD] %s", dr.Message)
+			}
+			if len(deniedResults) > 0 {
+				// Some calls denied: append synthetic results for denied calls.
+				for _, dr := range deniedResults {
+					conv.history = append(conv.history, llm.MakeToolResultMessage(dr.ID, dr.Message))
+					log.Printf("[PATH-POLICY] Denied write to %s: %s", dr.Path, dr.Message)
+				}
+			}
+			if err := s.sendToolCalls(w, flusher, conv, taskID, allowed); err != nil {
 				log.Printf("[LLM] loop=%d failed to send tool calls: %v", i, err)
 				s.sendFinishError(w, flusher, err.Error())
 				return
@@ -1733,13 +1953,70 @@ func (s *Server) sendIncrementalText(w io.Writer, flusher http.Flusher, taskID, 
 	})
 }
 
-func validateSupportedToolCalls(toolCalls []llm.ToolCall) error {
-	for _, tc := range toolCalls {
-		if _, ok := supportedTools[tc.Name]; !ok {
-			return fmt.Errorf("tool %s is not supported by this local adapter", tc.Name)
-		}
+// sendTodoListUpdate 把 todo 状态推给客户端刷新 UI 面板。
+// 通过 ClientAction AddMessagesToTask 发 UpdateTodos 消息。
+func (s *Server) sendTodoListUpdate(w io.Writer, flusher http.Flusher, taskID string, prev, curr []TaskItem) {
+	ops := todoListToProto(prev, curr)
+	if len(ops) == 0 {
+		return
 	}
-	return nil
+	msgs := make([]*pb.Message, 0, len(ops))
+	for _, op := range ops {
+		msgs = append(msgs, &pb.Message{
+			Id:     uuid.New().String(),
+			TaskId: taskID,
+			Message: &pb.Message_UpdateTodos_{
+				UpdateTodos: op,
+			},
+		})
+	}
+	s.sendEvent(w, flusher, &pb.ResponseEvent{
+		Type: &pb.ResponseEvent_ClientActions_{
+			ClientActions: &pb.ResponseEvent_ClientActions{
+				Actions: []*pb.ClientAction{
+					{
+						Action: &pb.ClientAction_AddMessagesToTask_{
+							AddMessagesToTask: &pb.ClientAction_AddMessagesToTask{
+								TaskId:   taskID,
+								Messages: msgs,
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+}
+
+// unsupportedToolDenial describes a tool call the adapter cannot execute.
+// A synthetic tool result is fed back to the LLM so it can recover with
+// supported tools instead of aborting the whole stream.
+type unsupportedToolDenial struct {
+	ID      string
+	Message string
+}
+
+// splitUnsupportedToolCalls partitions tool calls into ones the adapter can
+// execute and ones it cannot. The Warp client system prompt advertises tools
+// this adapter does not implement (e.g. run_scheduler_command), so models
+// occasionally call them; failing the stream is worse than telling the model.
+func splitUnsupportedToolCalls(toolCalls []llm.ToolCall) ([]llm.ToolCall, []unsupportedToolDenial) {
+	var supported []llm.ToolCall
+	var denied []unsupportedToolDenial
+	for _, tc := range toolCalls {
+		if _, ok := supportedTools[tc.Name]; ok {
+			supported = append(supported, tc)
+			continue
+		}
+		denied = append(denied, unsupportedToolDenial{
+			ID: tc.ID,
+			Message: fmt.Sprintf(
+				"Tool %q is not supported by this local adapter and was not executed. Supported tools: read_files, grep, file_glob, file_glob_v2, run_shell_command, read_shell_command_output, transfer_shell_command_control_to_user, apply_file_diffs, search_codebase, update_task_list. Continue using the supported tools, or explain the limitation to the user. Do not call %q again.",
+				tc.Name, tc.Name,
+			),
+		})
+	}
+	return supported, denied
 }
 
 func (s *Server) sendToolCalls(w io.Writer, flusher http.Flusher, conv *Conversation, taskID string, toolCalls []llm.ToolCall) error {
@@ -2179,3 +2456,785 @@ func assistantToolCallIDs(msg openai.ChatCompletionMessageParamUnion) ([]string,
 }
 
 var _ = json.RawMessage{}
+
+type memoryStatusResponse struct {
+	Enabled           bool   `json:"enabled"`
+	SessionEnabled    bool   `json:"session_enabled"`
+	AutoEnabled       bool   `json:"auto_enabled"`
+	BaseDir           string `json:"base_dir"`
+	CurrentProjectKey string `json:"current_project_key,omitempty"`
+	ContextWindow     struct {
+		Tokens            int `json:"tokens"`
+		CompactionAtChars int `json:"compaction_at_chars"`
+		KeepRecentChars   int `json:"keep_recent_chars"`
+		MaxRecentMessages int `json:"max_recent_messages"`
+	} `json:"context_window"`
+	Session struct {
+		NotesExists bool `json:"notes_exists"`
+		NotesBytes  int  `json:"notes_bytes"`
+	} `json:"session"`
+	Project struct {
+		MemoryCount       int  `json:"memory_count"`
+		MemoryIndexExists bool `json:"memory_index_exists"`
+	} `json:"project"`
+}
+
+func (s *Server) handleMemoryStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	var resp memoryStatusResponse
+	if s.memoryStore == nil {
+		resp.Enabled = false
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+	resp.Enabled = s.cfg.Memory.IsEnabled()
+	resp.SessionEnabled = s.cfg.Memory.IsSessionEnabled()
+	resp.AutoEnabled = s.cfg.Memory.IsAutoEnabled()
+	resp.BaseDir = s.memoryStore.BaseDir()
+	compactionCfg := memory.CompactionConfigForContextWindow(s.cfg.Memory.ContextWindowTokens)
+	resp.ContextWindow.Tokens = compactionCfg.ContextWindowTokens
+	resp.ContextWindow.CompactionAtChars = compactionCfg.MaxHistoryChars
+	resp.ContextWindow.KeepRecentChars = compactionCfg.MinRecentChars
+	resp.ContextWindow.MaxRecentMessages = compactionCfg.MaxRecentMessages
+	resp.CurrentProjectKey = r.URL.Query().Get("project_key")
+	if resp.CurrentProjectKey != "" && memory.SanitizeKey(resp.CurrentProjectKey) != resp.CurrentProjectKey {
+		http.Error(w, "project_key contains invalid characters", http.StatusBadRequest)
+		return
+	}
+	if resp.CurrentProjectKey == "" {
+		resp.CurrentProjectKey = s.resolveProjectKey("")
+	}
+	if convID := r.URL.Query().Get("conversation_id"); convID != "" {
+		if info, err := os.Stat(filepath.Join(s.memoryStore.BaseDir(), memory.SessionNotesRelPath(convID))); err == nil {
+			resp.Session.NotesExists = true
+			resp.Session.NotesBytes = int(info.Size())
+		}
+	}
+	if resp.CurrentProjectKey != "" {
+		memDir := filepath.Join(s.memoryStore.BaseDir(), "projects", resp.CurrentProjectKey, "memory")
+		if _, err := os.Stat(filepath.Join(memDir, "MEMORY.md")); err == nil {
+			resp.Project.MemoryIndexExists = true
+		}
+		if entries, err := os.ReadDir(memDir); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") && e.Name() != "MEMORY.md" {
+					resp.Project.MemoryCount++
+				}
+			}
+		}
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) handleMemoryClearSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if s.memoryStore == nil {
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "memory not initialized"})
+		return
+	}
+	var body struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ConversationID == "" {
+		http.Error(w, "conversation_id required", http.StatusBadRequest)
+		return
+	}
+	if memory.SanitizeKey(body.ConversationID) != body.ConversationID {
+		http.Error(w, "conversation_id contains invalid characters", http.StatusBadRequest)
+		return
+	}
+	if err := s.memoryStore.ClearSession(body.ConversationID); err != nil {
+		log.Printf("[MEMORY] Failed to clear session conv=%s: %v", body.ConversationID, err)
+		http.Error(w, "failed to clear session", http.StatusInternalServerError)
+		return
+	}
+	_ = s.memoryStore.AppendEvent(memory.Event{
+		Type:           "session_memory_cleared",
+		ConversationID: body.ConversationID,
+	})
+	log.Printf("[MEMORY] Cleared session memory for conv=%s", body.ConversationID)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
+}
+
+func (s *Server) handleMemoryClearProject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if s.memoryStore == nil {
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "memory not initialized"})
+		return
+	}
+	var body struct {
+		ProjectKey string `json:"project_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ProjectKey == "" {
+		http.Error(w, "project_key required", http.StatusBadRequest)
+		return
+	}
+	if memory.SanitizeKey(body.ProjectKey) != body.ProjectKey {
+		http.Error(w, "project_key contains invalid characters", http.StatusBadRequest)
+		return
+	}
+	if err := s.memoryStore.ClearProject(body.ProjectKey); err != nil {
+		log.Printf("[MEMORY] Failed to clear project key=%s: %v", body.ProjectKey, err)
+		http.Error(w, "failed to clear project", http.StatusInternalServerError)
+		return
+	}
+	_ = s.memoryStore.AppendEvent(memory.Event{
+		Type:       "project_memory_cleared",
+		ProjectKey: body.ProjectKey,
+	})
+	log.Printf("[MEMORY] Cleared project memory for key=%s", body.ProjectKey)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
+}
+
+// buildMemoryContext augments the system prompt with auto-memories and session notes,
+// and returns a potentially compacted history for the LLM.
+func (s *Server) buildMemoryContext(conv *Conversation, convID string) (string, []openai.ChatCompletionMessageParamUnion) {
+	systemPrompt := agent.SystemPrompt
+	history := conv.history
+
+	// 1. Inject auto-memories into system prompt.
+	if s.cfg.Memory.IsAutoEnabled() {
+		projectKey := conv.ProjectKey
+		if projectKey == "" {
+			projectKey = s.resolveProjectKey(convID)
+		}
+		memDir := filepath.Join(s.memoryStore.BaseDir(), "projects", projectKey, "memory")
+		if headers, err := memory.ScanMemoryHeaders(memDir); err == nil && len(headers) > 0 {
+			in := memory.SelectInput{
+				Query: s.lastUserQuery(conv),
+				Limit: s.cfg.Memory.MaxProjectMemory,
+				Now:   time.Now(),
+			}
+			selected := memory.SelectMemories(headers, in)
+			if len(selected) > 0 {
+				var sb strings.Builder
+				sb.WriteString(systemPrompt)
+				sb.WriteString("\n\nProject memories selected for this request:\n")
+				for _, m := range selected {
+					sb.WriteString(fmt.Sprintf("<memory path=%q type=%q updated_at=%q>\n", m.Header.Path, m.Header.Type, m.Header.UpdatedAt.Format("2006-01-02")))
+					if data, err := s.memoryStore.ReadFile("projects/" + projectKey + "/memory/" + m.Header.Path); err == nil {
+						content := string(data)
+						// Strip frontmatter for injection.
+						if idx := strings.Index(content, "\n---\n"); idx >= 0 {
+							content = content[idx+5:]
+						}
+						sb.WriteString(content)
+					}
+					sb.WriteString("\n</memory>\n")
+					if m.FreshnessWarning != "" {
+						sb.WriteString(fmt.Sprintf("(warning: %s)\n", m.FreshnessWarning))
+					}
+				}
+				systemPrompt = sb.String()
+				log.Printf("[MEMORY] Injected %d auto-memories for conv=%s", len(selected), convID)
+			}
+		}
+	}
+
+	// 2. Inject session notes and check compaction.
+	if s.cfg.Memory.IsSessionEnabled() {
+		notes, err := s.memoryStore.ReadSessionNotes(convID)
+		if err == nil && notes != "" {
+			if memory.IsEmptySessionNotes(notes) {
+				log.Printf("[MEMORY] Skipping compaction for conv=%s: notes are empty template", convID)
+			} else {
+				compactionMessages := s.historyToCompactionMsgs(history)
+				cfg := memory.CompactionConfigForContextWindow(s.cfg.Memory.ContextWindowTokens)
+				result := memory.ShouldCompact(compactionMessages, notes, cfg)
+				if result.ShouldCompact {
+					summaryMsg := llm.MakeUserMessage("[Session Memory Summary]\n" + notes + "\n[End of Session Memory. Continue from here with the recent messages below.]")
+					if result.StartIndex < len(history) {
+						recent := make([]openai.ChatCompletionMessageParamUnion, 0, len(history)-result.StartIndex+1)
+						recent = append(recent, summaryMsg)
+						recent = append(recent, history[result.StartIndex:]...)
+						history = recent
+						log.Printf("[MEMORY] Compacted history for conv=%s: boundary=%d original=%d kept=%d", convID, result.StartIndex, len(conv.history), len(recent))
+					}
+				}
+			}
+		}
+	}
+
+	return systemPrompt, history
+}
+
+// maybeUpdateSessionMemory checks if session memory should be updated and writes it.
+// This is a best-effort operation — failures are only logged.
+func (s *Server) maybeUpdateSessionMemory(conv *Conversation, convID string) {
+	stats := memory.SessionStats{
+		MessageCount:             len(conv.history),
+		HistoryChars:             estimateHistoryChars(conv.history),
+		ToolCallCount:            countToolCalls(conv.history),
+		LastAssistantHasToolCall: lastAssistantHasToolCall(conv.history),
+	}
+
+	var meta *memory.SessionMeta
+	if m, err := s.memoryStore.ReadSessionMeta(convID); err == nil {
+		meta = m
+	}
+
+	if !memory.ShouldUpdateSessionMemory(meta, stats) {
+		return
+	}
+
+	if err := s.updateSessionNotes(conv, convID, meta, stats); err != nil {
+		log.Printf("[MEMORY] Failed to update session notes for conv=%s: %v", convID, err)
+	}
+}
+
+const sessionExtractorPrompt = `You update a durable session memory file for a coding agent.
+Return only Markdown.
+Preserve every required heading exactly once: Session Title, Current State, Task Specification, Files And Functions, Workflow, Errors And Corrections, Tool Results Worth Keeping, Decisions, Key Results, Worklog.
+Use only facts present in the previous notes and new conversation delta.
+Merge duplicates, remove abandoned implementations, and keep the result concise but useful.
+Never include secrets or credentials.
+In Files And Functions, write real file/function paths.
+In Errors And Corrections, write the failure cause and the fix.
+In Tool Results Worth Keeping, keep only command results that will be useful later.
+If A was replaced by A1, keep only A1 and a brief migration note.`
+
+// updateSessionNotes extracts conversation content into session notes using the LLM.
+func (s *Server) updateSessionNotes(conv *Conversation, convID string, meta *memory.SessionMeta, stats memory.SessionStats) error {
+	// Read existing notes; if missing, create default template.
+	notes, err := s.memoryStore.ReadSessionNotes(convID)
+	if err != nil {
+		notes = memory.DefaultSessionNotes("Session " + memory.ShortID(convID))
+	}
+
+	// Build delta: messages since last update.
+	startIdx := 0
+	if meta != nil && meta.LastMessageIndex > 0 {
+		startIdx = meta.LastMessageIndex
+	}
+	if startIdx >= len(conv.history) {
+		startIdx = 0
+	}
+	delta := conv.history[startIdx:]
+
+	// Build the LLM request.
+	deltaSummary := s.summarizeDelta(delta)
+	if deltaSummary == "" {
+		log.Printf("[MEMORY] No meaningful delta for conv=%s, skipping update", convID)
+		return nil
+	}
+
+	var history []openai.ChatCompletionMessageParamUnion
+	history = append(history, llm.MakeUserMessage(fmt.Sprintf(
+		"Previous notes.md:\n\n%s\n\nNew conversation delta:\n\n%s\n\nUpdate the notes.md with the new information. Return the complete updated notes.md.",
+		notes, deltaSummary,
+	)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := conv.client.CompleteText(ctx, sessionExtractorPrompt, history)
+	if err != nil {
+		return fmt.Errorf("LLM extraction failed: %w", err)
+	}
+
+	// Validate the output.
+	if err := memory.ValidateSessionNotes(result); err != nil {
+		return fmt.Errorf("extractor output invalid: %w", err)
+	}
+	if memory.ContainsSecret(result) {
+		return fmt.Errorf("extractor output contains secrets, refusing to write")
+	}
+
+	// Write the updated notes.
+	if err := s.memoryStore.WriteSessionNotes(convID, result); err != nil {
+		return fmt.Errorf("cannot write notes: %w", err)
+	}
+
+	// Update meta cursor.
+	projectKey := conv.ProjectKey
+	if projectKey == "" {
+		projectKey = s.resolveProjectKey(convID)
+	}
+	newMeta := &memory.SessionMeta{
+		ConversationID:    convID,
+		ProjectKey:        projectKey,
+		LastMessageIndex:  stats.MessageCount,
+		LastHistoryChars:  stats.HistoryChars,
+		LastToolCallCount: stats.ToolCallCount,
+		UpdatedAt:         time.Now().UTC(),
+	}
+	if err := s.memoryStore.WriteSessionMeta(newMeta); err != nil {
+		return fmt.Errorf("cannot write meta: %w", err)
+	}
+
+	// Append event.
+	_ = s.memoryStore.AppendEvent(memory.Event{
+		Type:           "session_memory_updated",
+		ConversationID: convID,
+		Path:           memory.SessionNotesRelPath(convID),
+	})
+
+	log.Printf("[MEMORY] Updated session notes for conv=%s msgs=%d chars=%d tools=%d", convID, stats.MessageCount, stats.HistoryChars, stats.ToolCallCount)
+	return nil
+}
+
+// summarizeDelta creates a text summary of new messages for the extractor.
+func (s *Server) summarizeDelta(delta []openai.ChatCompletionMessageParamUnion) string {
+	var sb strings.Builder
+	for i, msg := range delta {
+		raw, err := json.Marshal(msg)
+		if err != nil {
+			continue
+		}
+		var payload struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal(raw, &payload) != nil {
+			continue
+		}
+		if payload.Content == "" {
+			continue
+		}
+		// Truncate very long messages to keep prompt manageable.
+		content := payload.Content
+		if len(content) > 2000 {
+			content = content[:2000] + "...(truncated)"
+		}
+		sb.WriteString(fmt.Sprintf("[%s]: %s\n", payload.Role, content))
+		if i > 30 {
+			sb.WriteString("...(more messages truncated)\n")
+			break
+		}
+	}
+	return sb.String()
+}
+
+// lastUserQuery extracts the last user message from history for memory selection.
+func (s *Server) lastUserQuery(conv *Conversation) string {
+	for i := len(conv.history) - 1; i >= 0; i-- {
+		msg := conv.history[i]
+		if msg.OfUser != nil {
+			raw, err := json.Marshal(msg)
+			if err == nil {
+				var payload struct {
+					Content string `json:"content"`
+				}
+				if json.Unmarshal(raw, &payload) == nil && payload.Content != "" {
+					return payload.Content
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// historyToCompactionMsgs converts openai history to simplified Msg for compaction.
+func (s *Server) historyToCompactionMsgs(history []openai.ChatCompletionMessageParamUnion) []memory.Msg {
+	msgs := make([]memory.Msg, 0, len(history))
+	for _, h := range history {
+		raw, err := json.Marshal(h)
+		if err != nil {
+			continue
+		}
+		var payload struct {
+			Role      string `json:"role"`
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				ID string `json:"id"`
+			} `json:"tool_calls"`
+			ToolCallID string `json:"tool_call_id"`
+		}
+		if json.Unmarshal(raw, &payload) != nil {
+			continue
+		}
+		m := memory.Msg{
+			Role:         payload.Role,
+			Content:      payload.Content,
+			ToolResultID: payload.ToolCallID,
+		}
+		for _, tc := range payload.ToolCalls {
+			m.ToolCallIDs = append(m.ToolCallIDs, tc.ID)
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs
+}
+
+func estimateHistoryChars(history []openai.ChatCompletionMessageParamUnion) int {
+	total := 0
+	for _, h := range history {
+		raw, err := json.Marshal(h)
+		if err == nil {
+			total += len(raw)
+		}
+	}
+	return total
+}
+
+func countToolCalls(history []openai.ChatCompletionMessageParamUnion) int {
+	count := 0
+	for _, h := range history {
+		if ids, ok := assistantToolCallIDs(h); ok {
+			count += len(ids)
+		}
+	}
+	return count
+}
+
+func lastAssistantHasToolCall(history []openai.ChatCompletionMessageParamUnion) bool {
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].OfAssistant != nil {
+			ids, ok := assistantToolCallIDs(history[i])
+			return ok && len(ids) > 0
+		}
+	}
+	return false
+}
+
+type pathPolicyDenial struct {
+	ID      string
+	Path    string
+	Message string
+}
+
+type managedSSHPolicyDenial struct {
+	ID      string
+	Message string
+}
+
+func enforceManagedSSHPolicy(
+	toolCalls []llm.ToolCall,
+	target agent.ManagedSSHTarget,
+	longRunningCommandID string,
+	history []openai.ChatCompletionMessageParamUnion,
+) ([]llm.ToolCall, []managedSSHPolicyDenial) {
+	if target.Host == "" {
+		return toolCalls, nil
+	}
+
+	var allowed []llm.ToolCall
+	var denied []managedSSHPolicyDenial
+	pendingRedundantSSH := longRunningCommandID != "" && historyHasRedundantSSH(history, target)
+
+	for _, tc := range toolCalls {
+		if tc.Name == "transfer_shell_command_control_to_user" && pendingRedundantSSH {
+			denied = append(denied, managedSSHPolicyDenial{
+				ID:      tc.ID,
+				Message: "Blocked control transfer: the pending command is a redundant SSH connection to the host this terminal is already connected to. Do not ask for its password. Tell the user to cancel that stale SSH command once, then run subsequent commands directly in the current remote terminal.",
+			})
+			continue
+		}
+		if tc.Name != "run_shell_command" {
+			allowed = append(allowed, tc)
+			continue
+		}
+
+		var args struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(tc.Args, &args) != nil {
+			allowed = append(allowed, tc)
+			continue
+		}
+		host, redundant := agent.RedundantSSHHost(args.Command, target)
+		if !redundant {
+			allowed = append(allowed, tc)
+			continue
+		}
+		denied = append(denied, managedSSHPolicyDenial{
+			ID: tc.ID,
+			Message: fmt.Sprintf(
+				"Blocked redundant SSH to %q: this Warp terminal is already connected to that managed SSH host. Run the intended command directly in the current terminal without ssh. Nested SSH is permitted only for a different destination host.",
+				host,
+			),
+		})
+	}
+	return allowed, denied
+}
+
+func historyHasRedundantSSH(
+	history []openai.ChatCompletionMessageParamUnion,
+	target agent.ManagedSSHTarget,
+) bool {
+	for i := len(history) - 1; i >= 0; i-- {
+		raw, err := json.Marshal(history[i])
+		if err != nil {
+			continue
+		}
+		var message storedMessage
+		if json.Unmarshal(raw, &message) != nil {
+			continue
+		}
+		for j := len(message.ToolCalls) - 1; j >= 0; j-- {
+			toolCall := message.ToolCalls[j]
+			if toolCall.Function.Name != "run_shell_command" {
+				continue
+			}
+			var args struct {
+				Command string `json:"command"`
+			}
+			if json.Unmarshal([]byte(toolCall.Function.Arguments), &args) != nil {
+				return false
+			}
+			_, redundant := agent.RedundantSSHHost(args.Command, target)
+			return redundant
+		}
+	}
+	return false
+}
+
+type pathCheck struct {
+	Path      string
+	Content   string
+	IsNewFile bool
+	Search    string
+	Replace   string
+	IsDiff    bool
+}
+
+// enforcePathPolicy checks file paths in apply_file_diffs tool calls.
+// It returns the allowed tool calls and synthetic denial results for denied paths.
+// Both Deny and Confirm decisions block the write in automatic mode.
+func (s *Server) enforcePathPolicy(toolCalls []llm.ToolCall) ([]llm.ToolCall, []pathPolicyDenial) {
+	var allowed []llm.ToolCall
+	var denied []pathPolicyDenial
+
+	// Use server CWD as workspace root.
+	workspaceRoot, _ := os.Getwd()
+	taskScope := ""
+	policy := tools.DefaultPathPolicy(workspaceRoot, taskScope)
+
+	for _, tc := range toolCalls {
+		if tc.Name != "apply_file_diffs" {
+			allowed = append(allowed, tc)
+			continue
+		}
+
+		var args struct {
+			Diffs []struct {
+				FilePath string `json:"file_path"`
+				Search   string `json:"search"`
+				Replace  string `json:"replace"`
+			} `json:"diffs"`
+			NewFiles []struct {
+				FilePath string `json:"file_path"`
+				Content  string `json:"content"`
+			} `json:"new_files"`
+			DeletedFiles []struct {
+				FilePath string `json:"file_path"`
+			} `json:"deleted_files"`
+		}
+		if json.Unmarshal(tc.Args, &args) != nil {
+			allowed = append(allowed, tc)
+			continue
+		}
+
+		var checks []pathCheck
+		for _, d := range args.Diffs {
+			checks = append(checks, pathCheck{Path: d.FilePath, Search: d.Search, Replace: d.Replace, IsDiff: true})
+		}
+		for _, nf := range args.NewFiles {
+			checks = append(checks, pathCheck{Path: nf.FilePath, Content: nf.Content, IsNewFile: true})
+		}
+		for _, df := range args.DeletedFiles {
+			checks = append(checks, pathCheck{Path: df.FilePath})
+		}
+
+		hasDenied := false
+		for _, c := range checks {
+			decision := tools.CanWrite(c.Path, policy)
+			if decision != tools.Allow {
+				msg := ""
+				if decision == tools.Deny {
+					msg = fmt.Sprintf("Path policy denied write to %q: this path is in the deny list. Do not attempt to write to .git, node_modules, config.yaml, or conversations.json.", c.Path)
+				} else {
+					msg = fmt.Sprintf("Path policy requires explicit user confirmation for write to %q. In automatic mode, this path is not allowed. Write to an allowed directory instead.", c.Path)
+				}
+				denied = append(denied, pathPolicyDenial{
+					ID:      tc.ID,
+					Path:    c.Path,
+					Message: msg,
+				})
+				hasDenied = true
+				break
+			}
+			// Check markdown line limits for new files and simple search/replace diffs.
+			if strings.HasSuffix(c.Path, ".md") {
+				content, ok := proposedMarkdownContent(workspaceRoot, c)
+				if ok {
+					if maxLines, limited := markdownLineLimitForPath(c.Path); limited {
+						lines := strings.Count(content, "\n") + 1
+						if lines > maxLines {
+							denied = append(denied, pathPolicyDenial{
+								ID:      tc.ID,
+								Path:    c.Path,
+								Message: fmt.Sprintf("Markdown file %q exceeds %d line limit (%d lines). Split into sub-documents and add an index.", c.Path, maxLines, lines),
+							})
+							hasDenied = true
+							break
+						}
+					}
+				}
+			}
+		}
+		if !hasDenied {
+			allowed = append(allowed, tc)
+		}
+	}
+
+	return allowed, denied
+}
+
+func markdownLineLimitForPath(path string) (int, bool) {
+	if path == "记忆系统设计方案/implementation-spec/07-code-review-fix-implementation.md" {
+		return 0, false
+	}
+	if filepath.Base(path) == "AGENTS.md" {
+		return 50, true
+	}
+	return 70, true
+}
+
+func proposedMarkdownContent(workspaceRoot string, c pathCheck) (string, bool) {
+	if c.IsNewFile {
+		return c.Content, c.Content != ""
+	}
+	if !c.IsDiff {
+		return "", false
+	}
+	target := c.Path
+	if !filepath.IsAbs(target) && workspaceRoot != "" {
+		target = filepath.Join(workspaceRoot, target)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return "", false
+	}
+	current := string(data)
+	if c.Search == "" || !strings.Contains(current, c.Search) {
+		return current, true
+	}
+	return strings.Replace(current, c.Search, c.Replace, 1), true
+}
+
+// resolveProjectKeyFromRequest determines the project key from request context.
+// It prefers explicit project roots from the client, then falls back to server CWD.
+func (s *Server) resolveProjectKeyFromRequest(req *pb.Request, convID string) string {
+	if root := workspaceRootFromRequest(req); root != "" {
+		return memory.ProjectKeyFromRoot(root)
+	}
+	return s.resolveProjectKey(convID)
+}
+
+func workspaceRootFromRequest(req *pb.Request) string {
+	if req == nil || req.GetInput() == nil || req.GetInput().GetContext() == nil {
+		return ""
+	}
+	ctx := req.GetInput().GetContext()
+	for _, rules := range ctx.GetProjectRules() {
+		if root := strings.TrimSpace(rules.GetRootPath()); root != "" && root != agent.ManagedSSHContextRoot {
+			return root
+		}
+	}
+	for _, codebase := range ctx.GetCodebases() {
+		if root := strings.TrimSpace(codebase.GetPath()); root != "" {
+			return root
+		}
+	}
+	if dir := ctx.GetDirectory(); dir != nil {
+		return strings.TrimSpace(dir.GetPwd())
+	}
+	return ""
+}
+
+// resolveProjectKey determines the project key when no request root is available.
+// It prefers the server CWD, then falls back to conversation-based key with a warning.
+func (s *Server) resolveProjectKey(convID string) string {
+	// Use server working directory as workspace root.
+	cwd, err := os.Getwd()
+	if err == nil && cwd != "" {
+		return memory.ProjectKeyFromRoot(cwd)
+	}
+	// Fallback: conversation-based key. This is not ideal for cross-session memory.
+	log.Printf("[MEMORY] WARNING: using conversation-based project key for conv=%s; workspace root unavailable", convID)
+	return memory.ProjectKey("", convID)
+}
+
+const projectExtractorPrompt = "You extract durable project knowledge from a conversation delta.\n" +
+	"Return ONLY a JSON object with this exact structure, no other text:\n" +
+	`{"updates":[{"path":"workflows.md","mode":"append_or_replace_section","section":"Build","content":"- go build ./... to build"},{"path":"known_issues.md","mode":"append_bullet","section":"Tool Pairing","content":"tool_call/tool_result must stay paired during compaction"}]}` + "\n\n" +
+	"Rules:\n" +
+	"- path must be one of: project_context.md, user_preferences.md, workflows.md, known_issues.md\n" +
+	"- mode must be: append_or_replace_section, append_bullet, or replace_file\n" +
+	"- section is the heading name (without #)\n" +
+	"- content is the text to add\n" +
+	"- Only extract facts that are durable across sessions, not temporary progress.\n" +
+	"- Never include secrets, credentials, or API keys.\n" +
+	`- If nothing worth remembering, return: {"updates":[]}`
+
+// maybeUpdateProjectMemory checks if project memory should be updated and writes it.
+func (s *Server) maybeUpdateProjectMemory(conv *Conversation, projectKey string, stats memory.SessionStats) {
+	if !s.cfg.Memory.IsAutoEnabled() {
+		return
+	}
+
+	// Ensure project memory is initialized.
+	if err := s.memoryStore.InitProjectMemory(projectKey); err != nil {
+		log.Printf("[MEMORY] Failed to init project memory for key=%s: %v", projectKey, err)
+		return
+	}
+
+	// Only update project memory when there are enough new messages.
+	if stats.MessageCount < 6 || stats.HistoryChars < 8000 {
+		return
+	}
+
+	// Build delta summary from history.
+	deltaSummary := s.summarizeDelta(conv.history)
+	if deltaSummary == "" {
+		return
+	}
+
+	var history []openai.ChatCompletionMessageParamUnion
+	history = append(history, llm.MakeUserMessage(fmt.Sprintf(
+		"Conversation delta:\n\n%s\n\nExtract durable project knowledge as a JSON patch.", deltaSummary,
+	)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := conv.client.CompleteText(ctx, projectExtractorPrompt, history)
+	if err != nil {
+		log.Printf("[MEMORY] Project extraction LLM call failed for key=%s: %v", projectKey, err)
+		return
+	}
+
+	patch, err := memory.ParseMemoryPatch([]byte(result))
+	if err != nil {
+		log.Printf("[MEMORY] Project extraction returned invalid JSON for key=%s: %v", projectKey, err)
+		return
+	}
+
+	if len(patch.Updates) == 0 {
+		return
+	}
+
+	if err := s.memoryStore.ApplyAndWritePatch(projectKey, patch); err != nil {
+		log.Printf("[MEMORY] Failed to apply project patch for key=%s: %v", projectKey, err)
+		return
+	}
+
+	_ = s.memoryStore.AppendEvent(memory.Event{
+		Type:       "project_memory_updated",
+		ProjectKey: projectKey,
+	})
+
+	log.Printf("[MEMORY] Updated project memory for key=%s with %d patches", projectKey, len(patch.Updates))
+}
