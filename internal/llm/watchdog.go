@@ -13,14 +13,16 @@ import (
 
 // DefaultStreamStallTimeout is the maximum allowed gap between two SSE chunks
 // before the stream is considered stalled. Healthy chat streams emit chunks at
-// sub-second intervals; even DeepSeek in slow periods keeps gaps within a few
-// seconds. 45s sits far above any observed healthy gap and far below the
-// 594~615s single-completion hangs seen in evaluation.
-const DefaultStreamStallTimeout = 45 * time.Second
+// sub-second intervals, but OpenAI-compatible providers may pause longer
+// between chunks while they prepare a tool response. Two minutes avoids
+// treating those healthy pauses as failures while still bounding genuinely
+// hung completions. Deployments can override it in server configuration.
+const DefaultStreamStallTimeout = 120 * time.Second
 
 // ErrStreamStall is returned by WatchdogStream.Err when no chunk arrived
-// within the stall timeout. Callers should treat it as retryable: re-issue
-// the same request with a fresh stream.
+// within the stall timeout. Callers may retry only if no response chunk was
+// previously delivered; replaying a partial response can duplicate output or
+// tool calls.
 var ErrStreamStall = errors.New("llm stream stalled: no new chunk within stall timeout")
 
 // WatchdogStream wraps the SDK's SSE stream and detects stalls: if Next()

@@ -9,6 +9,8 @@ model: deepseek-v4-flash
 server:
   host: 127.0.0.1
   port: 18889
+  # Some OpenAI-compatible providers pause while preparing a tool response.
+  stream_stall_timeout_seconds: 180
 memory:
   # 评测必须关记忆:协议不支持按请求传 base_dir,开着会让多任务共享
   # 项目记忆(工作目录 /app 相同 → 同一 project key),造成跨任务污染。

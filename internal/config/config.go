@@ -8,10 +8,10 @@ import (
 )
 
 type Config struct {
-	Provider string       `yaml:"provider"`
-	BaseURL  string       `yaml:"base_url"`
-	APIKey   string       `yaml:"api_key"`
-	Model    string       `yaml:"model"`
+	Provider string `yaml:"provider"`
+	BaseURL  string `yaml:"base_url"`
+	APIKey   string `yaml:"api_key"`
+	Model    string `yaml:"model"`
 	// MaxTokens caps completion output (reasoning included on thinking models).
 	// 0 means "do not send the parameter" and use the provider default.
 	// Some providers default to a small cap, which lets thinking models burn
@@ -22,14 +22,15 @@ type Config struct {
 	// true and the provider supports it (e.g. GLM/DeepSeek thinking parameter).
 	// Reduces latency and prevents reasoning from consuming the output budget,
 	// at the cost of reasoning quality on hard problems.
-	ThinkingDisabled bool `yaml:"thinking_disabled"`
+	ThinkingDisabled bool         `yaml:"thinking_disabled"`
 	Server           ServerConfig `yaml:"server"`
 	Memory           MemoryConfig `yaml:"memory"`
 }
 
 type ServerConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+	Host                      string `yaml:"host"`
+	Port                      int    `yaml:"port"`
+	StreamStallTimeoutSeconds int    `yaml:"stream_stall_timeout_seconds"`
 }
 
 type MemoryConfig struct {
@@ -71,8 +72,9 @@ func (m *MemoryConfig) IsAutoEnabled() bool {
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Host: "127.0.0.1",
-			Port: 18888,
+			Host:                      "127.0.0.1",
+			Port:                      18888,
+			StreamStallTimeoutSeconds: 120,
 		},
 	}
 }
@@ -86,6 +88,9 @@ func ApplyDefaults(cfg *Config) *Config {
 	}
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 18888
+	}
+	if cfg.Server.StreamStallTimeoutSeconds <= 0 {
+		cfg.Server.StreamStallTimeoutSeconds = 120
 	}
 	if cfg.Memory.MaxProjectMemory == 0 {
 		cfg.Memory.MaxProjectMemory = 5

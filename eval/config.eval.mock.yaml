@@ -7,5 +7,6 @@ model: mock-model
 server:
   host: 127.0.0.1
   port: 18889
+  stream_stall_timeout_seconds: 120
 memory:
   enabled: false

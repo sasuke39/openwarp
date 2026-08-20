@@ -5,5 +5,8 @@ model: gpt-4.1-mini
 server:
   host: 127.0.0.1
   port: 18888
+  # Maximum quiet period between provider SSE chunks. Raise for slow
+  # OpenAI-compatible providers; 0 uses the 120-second default.
+  stream_stall_timeout_seconds: 120
 memory:
   context_window_tokens: 32000

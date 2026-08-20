@@ -58,6 +58,7 @@ func NewClientWithHTTPClient(cfg *config.Config, httpClient *http.Client) *Clien
 }
 
 func newClient(cfg *config.Config, httpClient *http.Client) *Client {
+	cfg = config.ApplyDefaults(cfg)
 	opts := []option.RequestOption{
 		option.WithAPIKey(cfg.APIKey),
 	}
@@ -332,7 +333,7 @@ func newClient(cfg *config.Config, httpClient *http.Client) *Client {
 			// 列表存进会话内存状态,不转发给客户端执行。每轮请求时把当前
 			// 任务进度注入 system prompt 尾部(见 cmd/server/tasklist.go)。
 			Function: shared.FunctionDefinitionParam{
-				Name:        "update_task_list",
+				Name: "update_task_list",
 				Description: param.NewOpt("Update the task list for this work session. Use this to plan your approach, track progress, and stay focused. Call it:\n" +
 					"- At the start of any non-trivial task to outline your steps\n" +
 					"- After completing each step to mark it done and move to the next\n" +
@@ -386,13 +387,13 @@ func newClient(cfg *config.Config, httpClient *http.Client) *Client {
 		tools:              tools,
 		maxTokens:          cfg.MaxTokens,
 		thinkingDisabled:   cfg.ThinkingDisabled,
-		streamStallTimeout: DefaultStreamStallTimeout,
+		streamStallTimeout: time.Duration(cfg.Server.StreamStallTimeoutSeconds) * time.Second,
 	}
 }
 
 // SetStreamStallTimeout overrides the watchdog stall timeout for streaming
-// calls. Primarily intended for tests; production code should keep
-// DefaultStreamStallTimeout.
+// calls. Production configuration should normally use
+// server.stream_stall_timeout_seconds instead.
 func (c *Client) SetStreamStallTimeout(d time.Duration) {
 	c.streamStallTimeout = d
 }
