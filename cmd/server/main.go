@@ -1591,14 +1591,11 @@ func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flu
 		var result llm.StreamResult
 		var chunkCount int
 
-		// Retry loop for this iteration's completion. On stall/empty-response
-		// we discard the partial chunks and re-request the whole completion
-		// with the identical systemPrompt/history. Trade-off: text deltas from
-		// the failed attempt were already streamed to the client and are NOT
-		// rolled back — the retried attempt streams into a fresh message ID,
-		// so the client may briefly show a duplicated prefix. Re-fetching the
-		// whole completion is far simpler and safer than trying to resume a
-		// half-broken SSE stream mid-way.
+		// Retry loop for this iteration's completion. An empty stream can be
+		// retried safely. Once any SSE chunk has arrived, however, replaying the
+		// request is unsafe: text may already be visible to the client and tool
+		// calls may already be partially assembled. A later retry can duplicate
+		// either, so report that partial-stream failure instead.
 		//
 		// requestHistory 是本轮迭代的请求历史,初始等于 historyForLLM。
 		// 当检测到"推理耗尽输出预算"型空响应(finish_reason=length)时,会在
@@ -1656,12 +1653,17 @@ func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flu
 
 			if err := stream.Err(); err != nil {
 				if errors.Is(err, llm.ErrStreamStall) && ctx.Err() == nil {
-					if attempt < maxStreamRetries {
+					if chunkCount == 0 && attempt < maxStreamRetries {
 						attempt++
-						log.Printf("[LLM-WATCHDOG] loop=%d stream stalled after %d chunks, retrying same request (%d/%d)", i, chunkCount, attempt, maxStreamRetries)
+						log.Printf("[LLM-WATCHDOG] loop=%d stream stalled before first chunk, retrying request (%d/%d)", i, attempt, maxStreamRetries)
 						continue
 					}
-					log.Printf("[LLM-WATCHDOG] loop=%d stream stalled after %d chunks, retries exhausted", i, chunkCount)
+					if chunkCount > 0 {
+						err = fmt.Errorf("%w; partial response (%d chunks) was not retried to avoid duplicate output or tool calls", err, chunkCount)
+						log.Printf("[LLM-WATCHDOG] loop=%d stream stalled after %d chunks; not retrying partial response", i, chunkCount)
+					} else {
+						log.Printf("[LLM-WATCHDOG] loop=%d stream stalled before first chunk; retries exhausted", i)
+					}
 				}
 				log.Printf("[LLM] loop=%d STREAM ERROR: %v", i, err)
 				// If the client disconnected, don't try to write an error event —

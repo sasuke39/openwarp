@@ -121,8 +121,9 @@ func runLoopForTest(s *Server, conv *Conversation) *httptest.ResponseRecorder {
 	return rec
 }
 
-// First streaming attempt stalls mid-stream; the retry succeeds.
-func TestRunAgentLoop_RetriesStalledStream(t *testing.T) {
+// A stream that stalls after yielding output must not be replayed: the client
+// has already received the text and a retry could duplicate text or tool calls.
+func TestRunAgentLoop_DoesNotRetryPartialStalledStream(t *testing.T) {
 	var streamCalls int32
 	rt := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(r.Body)
@@ -138,8 +139,6 @@ func TestRunAgentLoop_RetriesStalledStream(t *testing.T) {
 		if call == 1 {
 			// Deliver one chunk, then go silent until the watchdog aborts us.
 			respBody = &stallThenBlockBody{prefix: strings.NewReader(sseChunkPayload("stalled-partial")), done: r.Context().Done()}
-		} else {
-			respBody = io.NopCloser(strings.NewReader(sseChunkPayload("Recovered.") + sseDonePayload))
 		}
 		return &http.Response{StatusCode: 200, Header: header, Body: respBody, Request: r}, nil
 	})
@@ -147,15 +146,50 @@ func TestRunAgentLoop_RetriesStalledStream(t *testing.T) {
 	s, conv := newWatchdogTestServer(t, rt, 150*time.Millisecond)
 	rec := runLoopForTest(s, conv)
 
-	if got := atomic.LoadInt32(&streamCalls); got != 2 {
-		t.Fatalf("expected 2 stream attempts (1 stall + 1 retry), got %d", got)
+	if got := atomic.LoadInt32(&streamCalls); got != 1 {
+		t.Fatalf("expected 1 stream attempt after partial stall, got %d", got)
 	}
 	done, errMsgs := finishOutcome(decodeResponseEvents(t, rec.Body.String()))
-	if !done {
-		t.Fatalf("expected Done finish after retry, errors=%v", errMsgs)
+	if done {
+		t.Fatalf("expected no Done finish after partial stall, errors=%v", errMsgs)
 	}
-	if len(errMsgs) != 0 {
-		t.Fatalf("expected no finish errors, got %v", errMsgs)
+	if len(errMsgs) != 1 || !strings.Contains(errMsgs[0], "partial response") {
+		t.Fatalf("expected clear partial-response finish error, got %v", errMsgs)
+	}
+}
+
+// Before any response chunk reaches the client, retrying a stalled request is
+// safe because there is no visible text or partially assembled tool call.
+func TestRunAgentLoop_RetriesStallBeforeFirstChunk(t *testing.T) {
+	var streamCalls int32
+	rt := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		call := atomic.AddInt32(&streamCalls, 1)
+		header := http.Header{"Content-Type": []string{"text/event-stream"}}
+		if call == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     header,
+				Body:       &stallThenBlockBody{prefix: strings.NewReader(""), done: r.Context().Done()},
+				Request:    r,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader(sseChunkPayload("Recovered.") + sseDonePayload)),
+			Request:    r,
+		}, nil
+	})
+
+	s, conv := newWatchdogTestServer(t, rt, 150*time.Millisecond)
+	rec := runLoopForTest(s, conv)
+
+	if got := atomic.LoadInt32(&streamCalls); got != 2 {
+		t.Fatalf("expected 2 stream attempts (empty stall + retry), got %d", got)
+	}
+	done, errMsgs := finishOutcome(decodeResponseEvents(t, rec.Body.String()))
+	if !done || len(errMsgs) != 0 {
+		t.Fatalf("expected successful retry before first chunk, done=%v errors=%v", done, errMsgs)
 	}
 }
 

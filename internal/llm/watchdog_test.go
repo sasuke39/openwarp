@@ -27,6 +27,13 @@ func newTestClient(t *testing.T, srv *httptest.Server, stallTimeout time.Duratio
 	return c
 }
 
+func TestNewClientUsesConfiguredStreamStallTimeout(t *testing.T) {
+	c := NewClient(&config.Config{Server: config.ServerConfig{StreamStallTimeoutSeconds: 180}})
+	if c.streamStallTimeout != 180*time.Second {
+		t.Fatalf("expected configured stall timeout 180s, got %s", c.streamStallTimeout)
+	}
+}
+
 // (a) A healthy stream must flow through the watchdog untouched.
 func TestWatchdogStream_NormalStreamUnaffected(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
