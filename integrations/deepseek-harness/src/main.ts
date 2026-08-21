@@ -27,6 +27,7 @@ const socketPath = join(tmpdir(), `open-warp-dsh-${process.pid}.sock`)
 const sessionRoot = process.env.DSH_SESSION_ROOT ?? join(tmpdir(), 'open-warp-dsh-sessions')
 const sessions = new Map<string, SessionState>()
 const callOwners = new Map<string, Socket>()
+const toolSockets = new Set<Socket>()
 let shutdownPromise: Promise<void> | undefined
 
 await mkdir(sessionRoot, { recursive: true })
@@ -96,6 +97,13 @@ function startTurn(exchangeId: string, request: TurnRequest): void {
           command: process.execPath,
           args: [runtimeBin, configPath],
           env: runtimeEnv,
+          // The Go adapter gives runtime shutdown five seconds. Keep the
+          // SDK's complete protocol -> EOF -> TERM -> KILL ladder below that
+          // bound so the sidecar can reap its child instead of being killed
+          // first and leaving an orphaned JSON-RPC runtime.
+          shutdownTimeoutMs: 500,
+          disposeEofGraceMs: 1_500,
+          disposeGraceMs: 1_000,
         },
         cwd: process.cwd(),
         provider: process.env.DSH_PROVIDER ?? 'deepseek-official',
@@ -175,7 +183,8 @@ function onNotification(conversationId: string, notification: HarnessNotificatio
 }
 
 function attachToolSocket(socket: Socket): void {
-  let buffer = ''
+	toolSockets.add(socket)
+	let buffer = ''
   socket.setEncoding('utf8')
   socket.on('data', chunk => {
     buffer += chunk
@@ -207,8 +216,9 @@ function attachToolSocket(socket: Socket): void {
       writeEvent(state.exchangeId, { type: 'turn.awaiting_tool' })
     }
   })
-  socket.on('close', () => {
-    for (const [id, owner] of callOwners) {
+	socket.on('close', () => {
+		toolSockets.delete(socket)
+		for (const [id, owner] of callOwners) {
       if (owner === socket) callOwners.delete(id)
     }
   })
@@ -229,10 +239,24 @@ function writeEvent(exchangeId: string, event: Record<string, unknown>): void {
 async function shutdown(): Promise<void> {
 	if (shutdownPromise !== undefined) return shutdownPromise
 	shutdownPromise = (async () => {
+		// Yield once so shutdownPromise is assigned before lines.close()
+		// synchronously emits its own close event and re-enters shutdown().
+		await Promise.resolve()
 		lines.close()
-		await new Promise<void>(resolve => toolServer.close(() => resolve()))
-		await Promise.all([...sessions.values()].map(state => state.harness.close()))
+		// Stop accepting connections immediately, but do not await the close
+		// callback yet: it only fires after existing tool sockets close, and those
+		// sockets are owned by the Harness children we still need to shut down.
+		const serverClosed = new Promise<void>((resolve, reject) => {
+			toolServer.close(error => error === undefined ? resolve() : reject(error))
+		})
+		const results = await Promise.allSettled([...sessions.values()].map(state => state.harness.close()))
 		sessions.clear()
+		callOwners.clear()
+		for (const socket of toolSockets) socket.destroy()
+		await serverClosed
+		for (const result of results) {
+			if (result.status === 'rejected') console.error(`[shutdown] failed to close Harness child: ${String(result.reason)}`)
+		}
 		await rm(socketPath, { force: true })
 	})()
 	return shutdownPromise

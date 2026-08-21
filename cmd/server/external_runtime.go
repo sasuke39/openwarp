@@ -22,9 +22,18 @@ func (s *Server) runExternalAgent(
 	flusher interface{ Flush() },
 	conv *Conversation,
 	conversationID, requestID, taskID string,
+	taskAlreadyExists bool,
 	inputs []input,
 	executionContext *pb.InputContext,
 ) bool {
+	// Keep the external-runtime event sequence identical to the native agent
+	// loop. When Warp did not provide a task in TaskContext, the generated task
+	// ID is unknown to the client until CreateTask arrives. Sending output first
+	// makes Warp reject every subsequent action with TaskNotFound.
+	if !taskAlreadyExists {
+		s.sendCreateTask(w, flusher, taskID)
+	}
+
 	runtimeInputs := make([]agentruntime.Input, 0, len(inputs))
 	for _, in := range inputs {
 		if in.LongRunningCommandID != "" {

@@ -1094,7 +1094,7 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 		s.runningTasks.Store(taskID, cancel)
 		defer s.runningTasks.Delete(taskID)
 
-		s.runExternalAgent(ctx, runtimeDriver, w, flusher, conv, convID, requestID, taskID, inputs, req.GetInput().GetContext())
+		s.runExternalAgent(ctx, runtimeDriver, w, flusher, conv, convID, requestID, taskID, isFollowUp || taskIDFromClient, inputs, req.GetInput().GetContext())
 		s.runtimeMu.RUnlock()
 		conv.mu.Unlock()
 		s.requestConversationSave()
