@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -53,3 +55,63 @@ func TestShellQuote(t *testing.T) {
 		t.Fatalf("shellQuote = %q", got)
 	}
 }
+
+type externalRuntimeTestDriver struct{}
+
+func (externalRuntimeTestDriver) Name() string { return "test-runtime" }
+func (externalRuntimeTestDriver) Exchange(_ context.Context, _ agentruntime.TurnRequest, emit func(agentruntime.Event) error) error {
+	if err := emit(agentruntime.Event{Type: agentruntime.EventAssistantDelta, Text: "hello"}); err != nil {
+		return err
+	}
+	return emit(agentruntime.Event{Type: agentruntime.EventTurnCompleted})
+}
+func (externalRuntimeTestDriver) Cancel(context.Context, string) error { return nil }
+func (externalRuntimeTestDriver) Close(context.Context) error          { return nil }
+
+func TestRunExternalAgentCreatesTaskBeforeFirstMessage(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	server := &Server{}
+
+	if ok := server.runExternalAgent(
+		context.Background(), externalRuntimeTestDriver{}, recorder, recorder,
+		&Conversation{}, "conversation-1", "request-1", "task-1", false,
+		[]input{{Kind: "user_query", Content: "hello"}}, nil,
+	); !ok {
+		t.Fatal("expected external runtime turn to finish successfully")
+	}
+
+	events := decodeResponseEvents(t, recorder.Body.String())
+	if len(events) < 3 {
+		t.Fatalf("expected CreateTask, message, and finish events, got %d", len(events))
+	}
+	actions := events[0].GetClientActions().GetActions()
+	if len(actions) != 1 || actions[0].GetCreateTask().GetTask().GetId() != "task-1" {
+		t.Fatalf("first external runtime action must create task-1: %+v", actions)
+	}
+	if messages := events[1].GetClientActions().GetActions()[0].GetAddMessagesToTask().GetMessages(); len(messages) != 1 || messages[0].GetAgentOutput().GetText() != "hello" {
+		t.Fatalf("second external runtime action must add the first message: %+v", messages)
+	}
+}
+
+func TestRunExternalAgentDoesNotRecreateExistingTask(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	server := &Server{}
+
+	if ok := server.runExternalAgent(
+		context.Background(), externalRuntimeTestDriver{}, recorder, recorder,
+		&Conversation{}, "conversation-1", "request-1", "task-1", true,
+		[]input{{Kind: "tool_result", ToolCallID: "call-1", Content: "ok"}}, nil,
+	); !ok {
+		t.Fatal("expected external runtime continuation to finish successfully")
+	}
+
+	for _, event := range decodeResponseEvents(t, recorder.Body.String()) {
+		for _, action := range event.GetClientActions().GetActions() {
+			if action.GetCreateTask() != nil {
+				t.Fatal("existing task must not be created again")
+			}
+		}
+	}
+}
+
+var _ agentruntime.Driver = externalRuntimeTestDriver{}
