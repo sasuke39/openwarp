@@ -22,9 +22,19 @@ type Config struct {
 	// true and the provider supports it (e.g. GLM/DeepSeek thinking parameter).
 	// Reduces latency and prevents reasoning from consuming the output budget,
 	// at the cost of reasoning quality on hard problems.
-	ThinkingDisabled bool         `yaml:"thinking_disabled"`
-	Server           ServerConfig `yaml:"server"`
-	Memory           MemoryConfig `yaml:"memory"`
+	ThinkingDisabled bool          `yaml:"thinking_disabled"`
+	AgentRuntime     RuntimeConfig `yaml:"agent_runtime"`
+	Server           ServerConfig  `yaml:"server"`
+	Memory           MemoryConfig  `yaml:"memory"`
+}
+
+type RuntimeConfig struct {
+	// Driver selects the agent control loop. "native" preserves the current Go
+	// implementation; every other value resolves an external runtime driver.
+	Driver string `yaml:"driver"`
+	// Command and Args launch a newline-delimited JSON protocol sidecar.
+	Command string   `yaml:"command"`
+	Args    []string `yaml:"args"`
 }
 
 type ServerConfig struct {
@@ -71,6 +81,7 @@ func (m *MemoryConfig) IsAutoEnabled() bool {
 
 func Default() *Config {
 	return &Config{
+		AgentRuntime: RuntimeConfig{Driver: "native"},
 		Server: ServerConfig{
 			Host:                      "127.0.0.1",
 			Port:                      18888,
@@ -82,6 +93,9 @@ func Default() *Config {
 func ApplyDefaults(cfg *Config) *Config {
 	if cfg == nil {
 		cfg = Default()
+	}
+	if strings.TrimSpace(cfg.AgentRuntime.Driver) == "" {
+		cfg.AgentRuntime.Driver = "native"
 	}
 	if cfg.Server.Host == "" {
 		cfg.Server.Host = "127.0.0.1"
@@ -149,6 +163,9 @@ func MissingRequiredFields(cfg *Config) []string {
 	}
 	if cfg.Server.Port == 0 {
 		missing = append(missing, "server.port")
+	}
+	if cfg.AgentRuntime.Driver != "native" && strings.TrimSpace(cfg.AgentRuntime.Command) == "" {
+		missing = append(missing, "agent_runtime.command")
 	}
 	return missing
 }

@@ -27,3 +27,26 @@ func TestApplyDefaultsSetsAndPreservesStreamStallTimeout(t *testing.T) {
 		t.Fatalf("expected configured stream stall timeout 180, got %d", configured.Server.StreamStallTimeoutSeconds)
 	}
 }
+
+func TestApplyDefaultsSelectsNativeRuntime(t *testing.T) {
+	cfg := ApplyDefaults(&Config{})
+	if cfg.AgentRuntime.Driver != "native" {
+		t.Fatalf("default runtime = %q, want native", cfg.AgentRuntime.Driver)
+	}
+}
+
+func TestExternalRuntimeRequiresCommand(t *testing.T) {
+	cfg := ApplyDefaults(&Config{
+		Provider: "openai",
+		BaseURL:  "http://localhost/v1",
+		APIKey:   "test-key",
+		Model:    "test-model",
+		AgentRuntime: RuntimeConfig{
+			Driver: "deepseek-harness",
+		},
+	})
+	missing := MissingRequiredFields(cfg)
+	if len(missing) != 1 || missing[0] != "agent_runtime.command" {
+		t.Fatalf("missing fields = %#v", missing)
+	}
+}
