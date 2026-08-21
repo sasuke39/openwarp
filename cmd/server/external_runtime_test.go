@@ -1,13 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sasuke39/open-warp/internal/agentruntime"
+	"github.com/sasuke39/open-warp/internal/config"
+	pb "github.com/sasuke39/open-warp/internal/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestTranslateExternalToolCall(t *testing.T) {
@@ -111,6 +118,53 @@ func TestRunExternalAgentDoesNotRecreateExistingTask(t *testing.T) {
 				t.Fatal("existing task must not be created again")
 			}
 		}
+	}
+}
+
+func TestHandleAgentRequestCreatesMissingTaskBeforeExternalOutput(t *testing.T) {
+	disabled := false
+	server := NewServer(&config.Config{
+		Provider: "openai", BaseURL: "http://test.invalid/v1", APIKey: "test-key", Model: "test-model",
+		Memory: config.MemoryConfig{Enabled: &disabled},
+	}, filepath.Join(t.TempDir(), "config.yaml"))
+	server.runtimeMu.Lock()
+	server.runtimeDriver = externalRuntimeTestDriver{}
+	server.runtimeMu.Unlock()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := server.closeBackground(ctx); err != nil {
+			t.Errorf("close test server: %v", err)
+		}
+	})
+
+	raw, err := proto.Marshal(&pb.Request{
+		TaskContext: &pb.Request_TaskContext{},
+		Input: &pb.Request_Input{Type: &pb.Request_Input_UserQuery_{
+			UserQuery: &pb.Request_Input_UserQuery{Query: "hello"},
+		}},
+		Metadata: &pb.Request_Metadata{ConversationId: "conversation-http"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	server.handleAgentRequest(recorder, httptest.NewRequest(http.MethodPost, "/ai/multi-agent", bytes.NewReader(raw)))
+
+	events := decodeResponseEvents(t, recorder.Body.String())
+	createIndex, outputIndex := -1, -1
+	for eventIndex, event := range events {
+		for _, action := range event.GetClientActions().GetActions() {
+			if action.GetCreateTask() != nil {
+				createIndex = eventIndex
+			}
+			if action.GetAddMessagesToTask() != nil {
+				outputIndex = eventIndex
+			}
+		}
+	}
+	if createIndex < 0 || outputIndex < 0 || createIndex >= outputIndex {
+		t.Fatalf("HTTP event order must be StreamInit -> CreateTask -> output: create=%d output=%d events=%d", createIndex, outputIndex, len(events))
 	}
 }
 
