@@ -2190,7 +2190,7 @@ func (s *Server) sendToolCalls(w io.Writer, flusher http.Flusher, conv *Conversa
 			}
 			tcMsg.Tool = &pb.Message_ToolCall_RunShellCommand_{
 				RunShellCommand: &pb.Message_ToolCall_RunShellCommand{
-					Command:      args.Command,
+					Command:      isolateShellCommand(args.Command),
 					IsReadOnly:   args.IsReadOnly,
 					IsRisky:      args.IsRisky,
 					RiskCategory: parseRiskCategory(args.RiskCategory),
@@ -2332,6 +2332,14 @@ func (s *Server) sendToolCalls(w io.Writer, flusher http.Flusher, conv *Conversa
 		},
 	})
 	return nil
+}
+
+// isolateShellCommand executes every model-generated command in a subshell.
+// Warp reuses an interactive shell for tool calls, so commands such as set -x,
+// set -e, cd, export, alias, and trap must not leak into Warp's shell hooks or
+// later tool calls. The subshell preserves stdout, stderr, and the exit status.
+func isolateShellCommand(command string) string {
+	return "(\n" + command + "\n)"
 }
 
 func parseRiskCategory(s string) pb.RiskCategory {

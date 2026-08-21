@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,6 +50,25 @@ func TestFinishEventRunsDurableEnqueueFirst(t *testing.T) {
 	w := &finishOrderingWriter{t: t, beforeFinished: &committed}
 	if ok := (&Server{}).finishSuccessfulAgentLoop(ctx, w, w); !ok || !committed {
 		t.Fatalf("finished=%v committed=%v", ok, committed)
+	}
+}
+
+func TestIsolateShellCommandUsesSubshell(t *testing.T) {
+	got := isolateShellCommand("set -x\necho ok")
+	want := "(\nset -x\necho ok\n)"
+	if got != want {
+		t.Fatalf("unexpected isolated command:\n%s", got)
+	}
+}
+
+func TestIsolateShellCommandDoesNotLeakXtrace(t *testing.T) {
+	script := isolateShellCommand("set -x\ntrue") + `
+case $- in
+  *x*) exit 42 ;;
+esac
+`
+	if output, err := exec.Command("bash", "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("xtrace leaked outside isolated command: %v\n%s", err, output)
 	}
 }
 

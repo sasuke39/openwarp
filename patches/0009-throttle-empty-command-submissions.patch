@@ -1,0 +1,100 @@
+--- a/app/src/terminal/input.rs
++++ b/app/src/terminal/input.rs
+@@ -244,7 +244,7 @@
+     ops::Range,
+     path::{Path, PathBuf},
+     rc::Rc,
+-    time::Duration,
++    time::{Duration, Instant},
+ };
+ use string_offset::CharOffset;
+ use vec1::Vec1;
+@@ -379,6 +379,7 @@
+ 
+ pub const DEBOUNCE_INPUT_DECORATION_PERIOD: Duration = Duration::from_millis(10);
+ pub const DEBOUNCE_AI_QUERY_PREDICTION_PERIOD: Duration = Duration::from_millis(250);
++const EMPTY_COMMAND_SUBMISSION_COOLDOWN: Duration = Duration::from_millis(500);
+ pub(super) const CLI_AGENT_RICH_INPUT_EDITOR_MAX_HEIGHT: f32 = 236.;
+ pub(super) const CLI_AGENT_RICH_INPUT_EDITOR_TOP_PADDING: f32 = 10.;
+ pub(super) const CLI_AGENT_RICH_INPUT_EDITOR_BOTTOM_PADDING: f32 = 8.;
+@@ -1520,6 +1521,9 @@
+     /// The block for which a shell command was most recently submitted. A different active block
+     /// ID means the shell has completed the prior command and is ready for another submission.
+     last_submitted_block_id: Option<BlockId>,
++    /// Empty commands finish quickly enough to advance the active block between repeated Enter
++    /// key events. Rate-limit them across block IDs so one key burst cannot corrupt block layout.
++    last_empty_command_submission_at: Option<Instant>,
+     last_word_insertion: LastWordInsertion,
+ 
+     ai_controller: ModelHandle<BlocklistAIController>,
+@@ -3220,6 +3224,7 @@
+             debounce_ai_query_prediction_tx,
+             has_pending_command: false,
+             last_submitted_block_id: None,
++            last_empty_command_submission_at: None,
+             last_word_insertion,
+             decorations_future_handle: None,
+             autosuggestions_abort_handle: None,
+@@ -5985,6 +5990,17 @@
+         source: CommandExecutionSource,
+         ctx: &mut ViewContext<Self>,
+     ) -> bool {
++        if command.trim().is_empty()
++            && self
++                .last_empty_command_submission_at
++                .is_some_and(|submitted_at| {
++                    submitted_at.elapsed() < EMPTY_COMMAND_SUBMISSION_COOLDOWN
++                })
++        {
++            log::warn!("Ignored a rapid empty command submission");
++            return false;
++        }
++
+         if let CanExecuteCommand::No(reason) = self.can_execute_command(ctx) {
+             if reason.is_existing_active_command() {
+                 const MAX_COMMAND_LENGTH: usize = 43;
+@@ -6144,6 +6160,11 @@
+                 });
+             }
+ 
++            if command.trim().is_empty() {
++                self.last_empty_command_submission_at = Some(Instant::now());
++            } else {
++                self.last_empty_command_submission_at = None;
++            }
+             self.start_block_and_write_command_to_pty(command, source, ctx);
+             did_execute = true;
+         } else {
+--- a/app/src/terminal/input_test.rs
++++ b/app/src/terminal/input_test.rs
+@@ -6097,6 +6097,30 @@
+ }
+ 
+ #[test]
++fn test_rapid_empty_commands_are_throttled_across_blocks() {
++    App::test((), |mut app| async move {
++        initialize_app(&mut app);
++
++        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
++        let input = terminal.read(&app, |view, _| view.input().clone());
++
++        let first_submission =
++            input.update(&mut app, |input, ctx| input.try_execute_command("", ctx));
++        assert!(first_submission);
++
++        let second_submission = input.update(&mut app, |input, ctx| {
++            // Emulate the shell advancing to a fresh block before the next Enter event.
++            input.last_submitted_block_id = None;
++            input.try_execute_command("", ctx)
++        });
++        assert!(
++            !second_submission,
++            "rapid empty commands must be throttled even after the active block changes"
++        );
++    });
++}
++
++#[test]
+ fn test_remove_ignored_suggestion_on_ai_query_execution() {
+     App::test((), |mut app| async move {
+         initialize_app(&mut app);
