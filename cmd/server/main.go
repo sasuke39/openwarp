@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -54,14 +55,24 @@ type Conversation struct {
 }
 
 type Server struct {
-	mu              sync.RWMutex
-	conversations   map[string]*Conversation
-	runningTasks    sync.Map // taskID → context.CancelFunc
-	cfg             *config.Config
-	configPath      string
-	persistencePath string
-	lastConfigError string
-	memoryStore     *memory.Store
+	mu               sync.RWMutex
+	conversations    map[string]*Conversation
+	runningTasks     sync.Map // taskID → context.CancelFunc
+	cfg              *config.Config
+	configPath       string
+	persistencePath  string
+	lastConfigError  string
+	memoryStore      *memory.Store
+	memoryQueue      *memory.DurableQueue
+	memoryWake       chan struct{}
+	memoryCancel     context.CancelFunc
+	memoryDone       chan struct{}
+	persistWake      chan struct{}
+	persistDone      chan struct{}
+	stopCh           chan struct{}
+	stopOnce         sync.Once
+	memoryMutationMu sync.Mutex
+	persistenceMu    sync.Mutex
 }
 
 type settingsStatus struct {
@@ -95,6 +106,10 @@ func NewServer(cfg *config.Config, configPath string) *Server {
 		cfg:             config.ApplyDefaults(cfg),
 		configPath:      configPath,
 		persistencePath: filepath.Join(filepath.Dir(configPath), "conversations.json"),
+		memoryWake:      make(chan struct{}, 1),
+		persistWake:     make(chan struct{}, 1),
+		persistDone:     make(chan struct{}),
+		stopCh:          make(chan struct{}),
 	}
 	if err := server.loadConversations(); err != nil {
 		log.Printf("Failed to load persisted conversations: %v", err)
@@ -117,10 +132,18 @@ func NewServer(cfg *config.Config, configPath string) *Server {
 			}
 			server.memoryStore = store
 			log.Printf("[MEMORY] Store initialized at %s", store.BaseDir())
+			queue, queueErr := memory.OpenDurableQueue(filepath.Join(store.BaseDir(), "memory-queue.db"))
+			if queueErr != nil {
+				log.Printf("[MEMORY] Failed to open durable queue: %v", queueErr)
+			} else {
+				server.memoryQueue = queue
+				server.startMemoryWorker()
+			}
 		}
 	} else {
 		log.Printf("[MEMORY] Memory system is disabled by configuration")
 	}
+	go server.persistenceLoop()
 	return server
 }
 
@@ -141,9 +164,7 @@ func (s *Server) getOrCreateConversation(id string) *Conversation {
 	// Persist after releasing s.mu. saveConversations() takes s.mu.RLock(),
 	// so calling it while holding the write lock would deadlock on a brand-new
 	// conversation before the request can even emit StreamInit.
-	if err := s.saveConversations(); err != nil {
-		log.Printf("Failed to persist conversations after create: %v", err)
-	}
+	s.requestConversationSave()
 	return conv
 }
 
@@ -233,28 +254,19 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		log.Println("Shutting down...")
-		if err := server.saveConversations(); err != nil {
-			log.Printf("Failed to persist conversations on shutdown: %v", err)
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		httpServer.Shutdown(ctx)
-	}()
-
-	// Periodically persist conversations to guard against SIGKILL.
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			if err := server.saveConversations(); err != nil {
-				log.Printf("Failed to persist conversations (periodic): %v", err)
-			}
-		}
+		_ = httpServer.Shutdown(ctx)
 	}()
 
 	log.Printf("Local adapter listening on %s", addr)
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
+	}
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer closeCancel()
+	if err := server.closeBackground(closeCtx); err != nil {
+		log.Printf("Failed graceful background shutdown: %v", err)
 	}
 }
 
@@ -1043,6 +1055,9 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	ctx = context.WithValue(ctx, beforeAgentFinishKey{}, func() {
+		s.enqueueMemoryUpdates(conv, convID)
+	})
 
 	// Register the cancel function so the /agent/tasks/{task_id}/cancel
 	// endpoint can stop a running agent loop.
@@ -1050,25 +1065,8 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 	defer s.runningTasks.Delete(taskID)
 
 	s.runAgentLoop(ctx, w, flusher, conv, requestID, taskID, isFollowUp || taskIDFromClient, systemPrompt, historyForLLM, managedSSHTarget)
-
-	// After the agent loop, check if session memory should be updated.
-	if s.memoryStore != nil && s.cfg.Memory.IsEnabled() && s.cfg.Memory.IsSessionEnabled() {
-		s.maybeUpdateSessionMemory(conv, convID)
-	}
-	if s.memoryStore != nil && s.cfg.Memory.IsEnabled() && s.cfg.Memory.IsAutoEnabled() {
-		stats := memory.SessionStats{
-			MessageCount:             len(conv.history),
-			HistoryChars:             estimateHistoryChars(conv.history),
-			ToolCallCount:            countToolCalls(conv.history),
-			LastAssistantHasToolCall: lastAssistantHasToolCall(conv.history),
-		}
-		s.maybeUpdateProjectMemory(conv, conv.ProjectKey, stats)
-	}
-
 	conv.mu.Unlock()
-	if err := s.saveConversations(); err != nil {
-		log.Printf("Failed to persist conversations: %v", err)
-	}
+	s.requestConversationSave()
 }
 
 type input struct {
@@ -1201,6 +1199,8 @@ func (s *Server) loadConversations() error {
 }
 
 func (s *Server) saveConversations() error {
+	s.persistenceMu.Lock()
+	defer s.persistenceMu.Unlock()
 	// 只持短读锁拷贝会话快照。此前版本在 RLock 内逐个 conv.mu.Lock(),
 	// 而 handleAgentRequest 在整个 agent 循环期间(可能数分钟)持有 conv.mu:
 	// 一旦有新会话在 s.mu.Lock 上排队(Go RWMutex 写者优先),所有 RLock
@@ -1217,7 +1217,21 @@ func (s *Server) saveConversations() error {
 	s.mu.RUnlock()
 	sort.Slice(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
 
+	// Preserve the last durable snapshot for conversations that are currently
+	// busy. Skipping their mutex must not erase them from conversations.json.
 	persisted := make(map[string]persistedConversation, len(entries))
+	if previous, err := os.ReadFile(s.persistencePath); err == nil {
+		_ = json.Unmarshal(previous, &persisted)
+	}
+	active := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		active[entry.id] = struct{}{}
+	}
+	for id := range persisted {
+		if _, ok := active[id]; !ok {
+			delete(persisted, id)
+		}
+	}
 	for _, e := range entries {
 		// 正在跑 agent 循环的会话本轮跳过不存(下一次保存会覆盖),
 		// 绝不能在这里阻塞等待,否则又会把存盘路径和活跃会话耦合成死锁。
@@ -1251,7 +1265,43 @@ func (s *Server) saveConversations() error {
 	if err := os.MkdirAll(filepath.Dir(s.persistencePath), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(s.persistencePath, data, 0o644)
+	return atomicWritePersistence(s.persistencePath, data)
+}
+
+func atomicWritePersistence(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "conversations-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		if parent, err := os.Open(dir); err == nil {
+			err = parent.Sync()
+			_ = parent.Close()
+			return err
+		}
+	}
+	return nil
 }
 
 func serializeHistory(history []openai.ChatCompletionMessageParamUnion) ([]json.RawMessage, error) {
@@ -1561,7 +1611,7 @@ func formatFileContent(file *pb.FileContent) string {
 // 发给 LLM 的请求历史,不写进 conv.history(见 runAgentLoop 内注释)。
 const reasoningExhaustedNudge = "Your previous response was cut off because it exceeded the output token limit. Skip the detailed analysis and directly provide your best answer or the next tool call. Be concise."
 
-func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flusher, conv *Conversation, requestID, taskID string, isFollowUp bool, systemPrompt string, historyForLLM []openai.ChatCompletionMessageParamUnion, managedSSHTarget agent.ManagedSSHTarget) {
+func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flusher, conv *Conversation, requestID, taskID string, isFollowUp bool, systemPrompt string, historyForLLM []openai.ChatCompletionMessageParamUnion, managedSSHTarget agent.ManagedSSHTarget) bool {
 	// Only send CreateTask on the first request — it upgrades the client's
 	// optimistic task. On follow-up requests (tool results), the task already exists.
 	if !isFollowUp {
@@ -1577,7 +1627,7 @@ func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flu
 		// Check if client disconnected before starting a new loop iteration.
 		if ctx.Err() != nil {
 			log.Printf("[LLM] loop=%d context cancelled before stream: %v", i, ctx.Err())
-			return
+			return false
 		}
 
 		// 每轮请求前把当前任务清单注入 system prompt 尾部(WithExecutionContext
@@ -1621,7 +1671,7 @@ func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flu
 				// stays in CLOSE_WAIT until the handler unwinds.
 				if ctx.Err() != nil {
 					log.Printf("[LLM] loop=%d client disconnected mid-stream, aborting", i)
-					return
+					return false
 				}
 
 				chunk := stream.Current()
@@ -1670,10 +1720,10 @@ func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flu
 				// the connection is already closed.
 				if ctx.Err() != nil {
 					log.Printf("[LLM] loop=%d context also cancelled, skipping error event", i)
-					return
+					return false
 				}
 				s.sendFinishError(w, flusher, err.Error())
-				return
+				return false
 			}
 
 			result = llm.CollectStreamResult(chunks)
@@ -1799,10 +1849,9 @@ func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flu
 			if err := s.sendToolCalls(w, flusher, conv, taskID, allowed); err != nil {
 				log.Printf("[LLM] loop=%d failed to send tool calls: %v", i, err)
 				s.sendFinishError(w, flusher, err.Error())
-				return
+				return false
 			}
-			s.sendEvent(w, flusher, finishEvent(&pb.ResponseEvent_StreamFinished_Done{}))
-			return
+			return s.finishSuccessfulAgentLoop(ctx, w, flusher)
 		}
 
 		textPreview := result.Text
@@ -1814,18 +1863,30 @@ func (s *Server) runAgentLoop(ctx context.Context, w io.Writer, flusher http.Flu
 		if result.Text == "" {
 			log.Printf("[LLM] loop=%d empty response, sending error", i)
 			s.sendFinishError(w, flusher, "LLM returned empty response")
-			return
+			return false
 		}
 
 		conv.history = append(conv.history, llm.MakeAssistantMessageWithReasoning(result.Text, result.ReasoningContent))
 
 		log.Printf("[LLM] loop=%d sending Done finish event", i)
-		s.sendEvent(w, flusher, finishEvent(&pb.ResponseEvent_StreamFinished_Done{}))
-		return
+		return s.finishSuccessfulAgentLoop(ctx, w, flusher)
 	}
 
 	log.Printf("[LLM] Max tool loops reached")
 	s.sendFinishError(w, flusher, "Max tool call loops exceeded")
+	return false
+}
+
+type beforeAgentFinishKey struct{}
+
+func (s *Server) finishSuccessfulAgentLoop(ctx context.Context, w io.Writer, flusher http.Flusher) bool {
+	if beforeFinish, ok := ctx.Value(beforeAgentFinishKey{}).(func()); ok {
+		// Commit the immutable extraction job before StreamFinished. The callback
+		// never performs extraction or waits for a memory-model response.
+		beforeFinish()
+	}
+	s.sendEvent(w, flusher, finishEvent(&pb.ResponseEvent_StreamFinished_Done{}))
+	return true
 }
 
 func (s *Server) sendCreateTask(w io.Writer, flusher http.Flusher, taskID string) {
@@ -2479,6 +2540,8 @@ type memoryStatusResponse struct {
 		MemoryCount       int  `json:"memory_count"`
 		MemoryIndexExists bool `json:"memory_index_exists"`
 	} `json:"project"`
+	QueueAvailable bool              `json:"queue_available"`
+	Queue          memory.QueueStats `json:"queue"`
 }
 
 func (s *Server) handleMemoryStatus(w http.ResponseWriter, r *http.Request) {
@@ -2494,6 +2557,10 @@ func (s *Server) handleMemoryStatus(w http.ResponseWriter, r *http.Request) {
 	resp.SessionEnabled = s.cfg.Memory.IsSessionEnabled()
 	resp.AutoEnabled = s.cfg.Memory.IsAutoEnabled()
 	resp.BaseDir = s.memoryStore.BaseDir()
+	if s.memoryQueue != nil {
+		resp.QueueAvailable = true
+		resp.Queue, _ = s.memoryQueue.Stats(r.Context())
+	}
 	compactionCfg := memory.CompactionConfigForContextWindow(s.cfg.Memory.ContextWindowTokens)
 	resp.ContextWindow.Tokens = compactionCfg.ContextWindowTokens
 	resp.ContextWindow.CompactionAtChars = compactionCfg.MaxHistoryChars
@@ -2551,6 +2618,14 @@ func (s *Server) handleMemoryClearSession(w http.ResponseWriter, r *http.Request
 		http.Error(w, "conversation_id contains invalid characters", http.StatusBadRequest)
 		return
 	}
+	s.memoryMutationMu.Lock()
+	defer s.memoryMutationMu.Unlock()
+	if s.memoryQueue != nil {
+		if err := s.memoryQueue.ClearSession(r.Context(), body.ConversationID); err != nil {
+			http.Error(w, "failed to clear queued session memory", http.StatusInternalServerError)
+			return
+		}
+	}
 	if err := s.memoryStore.ClearSession(body.ConversationID); err != nil {
 		log.Printf("[MEMORY] Failed to clear session conv=%s: %v", body.ConversationID, err)
 		http.Error(w, "failed to clear session", http.StatusInternalServerError)
@@ -2585,6 +2660,14 @@ func (s *Server) handleMemoryClearProject(w http.ResponseWriter, r *http.Request
 	if memory.SanitizeKey(body.ProjectKey) != body.ProjectKey {
 		http.Error(w, "project_key contains invalid characters", http.StatusBadRequest)
 		return
+	}
+	s.memoryMutationMu.Lock()
+	defer s.memoryMutationMu.Unlock()
+	if s.memoryQueue != nil {
+		if err := s.memoryQueue.ClearProject(r.Context(), body.ProjectKey); err != nil {
+			http.Error(w, "failed to clear queued project memory", http.StatusInternalServerError)
+			return
+		}
 	}
 	if err := s.memoryStore.ClearProject(body.ProjectKey); err != nil {
 		log.Printf("[MEMORY] Failed to clear project key=%s: %v", body.ProjectKey, err)
@@ -2669,121 +2752,6 @@ func (s *Server) buildMemoryContext(conv *Conversation, convID string) (string, 
 	}
 
 	return systemPrompt, history
-}
-
-// maybeUpdateSessionMemory checks if session memory should be updated and writes it.
-// This is a best-effort operation — failures are only logged.
-func (s *Server) maybeUpdateSessionMemory(conv *Conversation, convID string) {
-	stats := memory.SessionStats{
-		MessageCount:             len(conv.history),
-		HistoryChars:             estimateHistoryChars(conv.history),
-		ToolCallCount:            countToolCalls(conv.history),
-		LastAssistantHasToolCall: lastAssistantHasToolCall(conv.history),
-	}
-
-	var meta *memory.SessionMeta
-	if m, err := s.memoryStore.ReadSessionMeta(convID); err == nil {
-		meta = m
-	}
-
-	if !memory.ShouldUpdateSessionMemory(meta, stats) {
-		return
-	}
-
-	if err := s.updateSessionNotes(conv, convID, meta, stats); err != nil {
-		log.Printf("[MEMORY] Failed to update session notes for conv=%s: %v", convID, err)
-	}
-}
-
-const sessionExtractorPrompt = `You update a durable session memory file for a coding agent.
-Return only Markdown.
-Preserve every required heading exactly once: Session Title, Current State, Task Specification, Files And Functions, Workflow, Errors And Corrections, Tool Results Worth Keeping, Decisions, Key Results, Worklog.
-Use only facts present in the previous notes and new conversation delta.
-Merge duplicates, remove abandoned implementations, and keep the result concise but useful.
-Never include secrets or credentials.
-In Files And Functions, write real file/function paths.
-In Errors And Corrections, write the failure cause and the fix.
-In Tool Results Worth Keeping, keep only command results that will be useful later.
-If A was replaced by A1, keep only A1 and a brief migration note.`
-
-// updateSessionNotes extracts conversation content into session notes using the LLM.
-func (s *Server) updateSessionNotes(conv *Conversation, convID string, meta *memory.SessionMeta, stats memory.SessionStats) error {
-	// Read existing notes; if missing, create default template.
-	notes, err := s.memoryStore.ReadSessionNotes(convID)
-	if err != nil {
-		notes = memory.DefaultSessionNotes("Session " + memory.ShortID(convID))
-	}
-
-	// Build delta: messages since last update.
-	startIdx := 0
-	if meta != nil && meta.LastMessageIndex > 0 {
-		startIdx = meta.LastMessageIndex
-	}
-	if startIdx >= len(conv.history) {
-		startIdx = 0
-	}
-	delta := conv.history[startIdx:]
-
-	// Build the LLM request.
-	deltaSummary := s.summarizeDelta(delta)
-	if deltaSummary == "" {
-		log.Printf("[MEMORY] No meaningful delta for conv=%s, skipping update", convID)
-		return nil
-	}
-
-	var history []openai.ChatCompletionMessageParamUnion
-	history = append(history, llm.MakeUserMessage(fmt.Sprintf(
-		"Previous notes.md:\n\n%s\n\nNew conversation delta:\n\n%s\n\nUpdate the notes.md with the new information. Return the complete updated notes.md.",
-		notes, deltaSummary,
-	)))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	result, err := conv.client.CompleteText(ctx, sessionExtractorPrompt, history)
-	if err != nil {
-		return fmt.Errorf("LLM extraction failed: %w", err)
-	}
-
-	// Validate the output.
-	if err := memory.ValidateSessionNotes(result); err != nil {
-		return fmt.Errorf("extractor output invalid: %w", err)
-	}
-	if memory.ContainsSecret(result) {
-		return fmt.Errorf("extractor output contains secrets, refusing to write")
-	}
-
-	// Write the updated notes.
-	if err := s.memoryStore.WriteSessionNotes(convID, result); err != nil {
-		return fmt.Errorf("cannot write notes: %w", err)
-	}
-
-	// Update meta cursor.
-	projectKey := conv.ProjectKey
-	if projectKey == "" {
-		projectKey = s.resolveProjectKey(convID)
-	}
-	newMeta := &memory.SessionMeta{
-		ConversationID:    convID,
-		ProjectKey:        projectKey,
-		LastMessageIndex:  stats.MessageCount,
-		LastHistoryChars:  stats.HistoryChars,
-		LastToolCallCount: stats.ToolCallCount,
-		UpdatedAt:         time.Now().UTC(),
-	}
-	if err := s.memoryStore.WriteSessionMeta(newMeta); err != nil {
-		return fmt.Errorf("cannot write meta: %w", err)
-	}
-
-	// Append event.
-	_ = s.memoryStore.AppendEvent(memory.Event{
-		Type:           "session_memory_updated",
-		ConversationID: convID,
-		Path:           memory.SessionNotesRelPath(convID),
-	})
-
-	log.Printf("[MEMORY] Updated session notes for conv=%s msgs=%d chars=%d tools=%d", convID, stats.MessageCount, stats.HistoryChars, stats.ToolCallCount)
-	return nil
 }
 
 // summarizeDelta creates a text summary of new messages for the extractor.
@@ -3167,76 +3135,4 @@ func (s *Server) resolveProjectKey(convID string) string {
 	// Fallback: conversation-based key. This is not ideal for cross-session memory.
 	log.Printf("[MEMORY] WARNING: using conversation-based project key for conv=%s; workspace root unavailable", convID)
 	return memory.ProjectKey("", convID)
-}
-
-const projectExtractorPrompt = "You extract durable project knowledge from a conversation delta.\n" +
-	"Return ONLY a JSON object with this exact structure, no other text:\n" +
-	`{"updates":[{"path":"workflows.md","mode":"append_or_replace_section","section":"Build","content":"- go build ./... to build"},{"path":"known_issues.md","mode":"append_bullet","section":"Tool Pairing","content":"tool_call/tool_result must stay paired during compaction"}]}` + "\n\n" +
-	"Rules:\n" +
-	"- path must be one of: project_context.md, user_preferences.md, workflows.md, known_issues.md\n" +
-	"- mode must be: append_or_replace_section, append_bullet, or replace_file\n" +
-	"- section is the heading name (without #)\n" +
-	"- content is the text to add\n" +
-	"- Only extract facts that are durable across sessions, not temporary progress.\n" +
-	"- Never include secrets, credentials, or API keys.\n" +
-	`- If nothing worth remembering, return: {"updates":[]}`
-
-// maybeUpdateProjectMemory checks if project memory should be updated and writes it.
-func (s *Server) maybeUpdateProjectMemory(conv *Conversation, projectKey string, stats memory.SessionStats) {
-	if !s.cfg.Memory.IsAutoEnabled() {
-		return
-	}
-
-	// Ensure project memory is initialized.
-	if err := s.memoryStore.InitProjectMemory(projectKey); err != nil {
-		log.Printf("[MEMORY] Failed to init project memory for key=%s: %v", projectKey, err)
-		return
-	}
-
-	// Only update project memory when there are enough new messages.
-	if stats.MessageCount < 6 || stats.HistoryChars < 8000 {
-		return
-	}
-
-	// Build delta summary from history.
-	deltaSummary := s.summarizeDelta(conv.history)
-	if deltaSummary == "" {
-		return
-	}
-
-	var history []openai.ChatCompletionMessageParamUnion
-	history = append(history, llm.MakeUserMessage(fmt.Sprintf(
-		"Conversation delta:\n\n%s\n\nExtract durable project knowledge as a JSON patch.", deltaSummary,
-	)))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	result, err := conv.client.CompleteText(ctx, projectExtractorPrompt, history)
-	if err != nil {
-		log.Printf("[MEMORY] Project extraction LLM call failed for key=%s: %v", projectKey, err)
-		return
-	}
-
-	patch, err := memory.ParseMemoryPatch([]byte(result))
-	if err != nil {
-		log.Printf("[MEMORY] Project extraction returned invalid JSON for key=%s: %v", projectKey, err)
-		return
-	}
-
-	if len(patch.Updates) == 0 {
-		return
-	}
-
-	if err := s.memoryStore.ApplyAndWritePatch(projectKey, patch); err != nil {
-		log.Printf("[MEMORY] Failed to apply project patch for key=%s: %v", projectKey, err)
-		return
-	}
-
-	_ = s.memoryStore.AppendEvent(memory.Event{
-		Type:       "project_memory_updated",
-		ProjectKey: projectKey,
-	})
-
-	log.Printf("[MEMORY] Updated project memory for key=%s with %d patches", projectKey, len(patch.Updates))
 }

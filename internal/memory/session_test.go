@@ -40,8 +40,8 @@ func TestShouldUpdateSessionMemory_TooEarly(t *testing.T) {
 func TestShouldUpdateSessionMemory_EnoughCharsAndTools(t *testing.T) {
 	meta := &SessionMeta{LastHistoryChars: 0, LastToolCallCount: 0}
 	stats := SessionStats{
-		HistoryChars:          12000,
-		ToolCallCount:         3,
+		HistoryChars:             12000,
+		ToolCallCount:            3,
 		LastAssistantHasToolCall: true,
 	}
 	if !ShouldUpdateSessionMemory(meta, stats) {
@@ -52,8 +52,8 @@ func TestShouldUpdateSessionMemory_EnoughCharsAndTools(t *testing.T) {
 func TestShouldUpdateSessionMemory_NaturalBreakpoint(t *testing.T) {
 	meta := &SessionMeta{LastHistoryChars: 0, LastToolCallCount: 0}
 	stats := SessionStats{
-		HistoryChars:          12000,
-		ToolCallCount:         0,
+		HistoryChars:             12000,
+		ToolCallCount:            0,
 		LastAssistantHasToolCall: false,
 	}
 	if !ShouldUpdateSessionMemory(meta, stats) {
@@ -64,8 +64,8 @@ func TestShouldUpdateSessionMemory_NaturalBreakpoint(t *testing.T) {
 func TestShouldUpdateSessionMemory_WaitingForTool(t *testing.T) {
 	meta := &SessionMeta{LastHistoryChars: 0, LastToolCallCount: 0}
 	stats := SessionStats{
-		HistoryChars:          12000,
-		ToolCallCount:         1,
+		HistoryChars:             12000,
+		ToolCallCount:            1,
 		LastAssistantHasToolCall: true,
 	}
 	if ShouldUpdateSessionMemory(meta, stats) {
@@ -92,12 +92,12 @@ func TestWriteAndReadSessionMeta(t *testing.T) {
 	s, _ := NewStore(Config{BaseDir: dir}, "")
 	_ = s.EnsureDirs()
 	meta := &SessionMeta{
-		ConversationID:   "c1",
-		ProjectKey:       "-Users-a-p",
-		LastMessageIndex: 10,
-		LastHistoryChars: 24000,
+		ConversationID:    "c1",
+		ProjectKey:        "-Users-a-p",
+		LastMessageIndex:  10,
+		LastHistoryChars:  24000,
 		LastToolCallCount: 3,
-		UpdatedAt:        time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC),
 	}
 	if err := s.WriteSessionMeta(meta); err != nil {
 		t.Fatal(err)

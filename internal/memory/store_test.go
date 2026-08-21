@@ -50,6 +50,7 @@ func TestSanitizePathKey(t *testing.T) {
 		{"/Users/a/mywarp/local-adapter", "-Users-a-mywarp-local-adapter"},
 		{"/tmp/x", "-tmp-x"},
 		{"/", "-"},
+		{"/Users/a/My Project.v2", "-Users-a-My-Project-v2"},
 	}
 	for _, tt := range tests {
 		got := SanitizePathKey(tt.input)
