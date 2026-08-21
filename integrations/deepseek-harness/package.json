@@ -1,0 +1,48 @@
+{
+  "name": "@open-warp/deepseek-harness-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "bin": {
+    "open-warp-dsh-runtime": "dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test test/*.test.ts",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-agent-spine-demo": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-compaction-basic": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-llm-deepseek": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-repeat-tool-reminder": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-sdk-client": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-sdk-jsonrpc-demo": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-session-checkpoint-policy": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-session-projection": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-subagent": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-subagent-fork-in-process": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-subagent-spawn-in-process": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-token-meter": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-tool-ralph": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-tool-subagent": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-tool-subagent-control": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-tool-subagent-report": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-tool-todo": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-tool-workflow": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-workflow-worker-thread": "0.1.1-rc.1",
+    "@deepseek-ai/schemastery": "3.18.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

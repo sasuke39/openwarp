@@ -1,0 +1,86 @@
+--- a/app/src/terminal/view.rs
++++ b/app/src/terminal/view.rs
+@@ -1642,6 +1642,21 @@ fn group_ai_requested_multiline_command(command: &str, shell_type: Option<ShellT
+     }
+ }
+ 
++/// Isolate an AI-requested command at the PTY boundary so shell state changes such as `set -x`,
++/// `cd`, exports, aliases, and traps do not leak into Warp's persistent interactive shell. Keep
++/// this decoration out of the agent action itself so command cards, approvals, and conversation
++/// history continue to show the original command.
++fn isolate_ai_requested_command(command: &str, shell_type: Option<ShellType>) -> String {
++    match shell_type {
++        Some(ShellType::Fish) => {
++            let escaped = command.replace('\\', "\\\\").replace('\'', "\\'");
++            format!("command fish -c '{escaped}'")
++        }
++        Some(ShellType::PowerShell) => format!("& {{\n{command}\n}}"),
++        Some(ShellType::Bash | ShellType::Zsh) | None => format!("(\n{command}\n)"),
++    }
++}
++
+ #[derive(Clone)]
+ pub struct ExecuteCommandEvent {
+     pub command: String,
+@@ -6221,6 +6236,7 @@ impl TerminalView {
+                 // block. Agent mode tracks one block per action, so group multiline input into one
+                 // shell-native compound command before writing it to the PTY.
+                 let command = group_ai_requested_multiline_command(&command, shell_type);
++                let command = isolate_ai_requested_command(&command, shell_type);
+ 
+                 let workflow_telem_metadata = associated_workflow.map(|workflow| {
+                     let workflow_data = &workflow.model().data;
+--- a/app/src/terminal/view_test.rs
++++ b/app/src/terminal/view_test.rs
+@@ -86,6 +86,51 @@ fn ai_requested_single_line_command_is_unchanged() {
+     );
+ }
+ 
++#[test]
++fn ai_requested_commands_are_isolated_only_at_execution() {
++    let command = "set -x; cd /tmp; echo done";
++
++    assert_eq!(
++        isolate_ai_requested_command(command, Some(ShellType::Bash)),
++        format!("(\n{command}\n)")
++    );
++    assert_eq!(
++        isolate_ai_requested_command(command, Some(ShellType::Zsh)),
++        format!("(\n{command}\n)")
++    );
++    assert_eq!(
++        isolate_ai_requested_command(command, Some(ShellType::PowerShell)),
++        format!("& {{\n{command}\n}}")
++    );
++}
++
++#[test]
++fn bash_execution_isolation_does_not_leak_xtrace() {
++    let isolated = isolate_ai_requested_command("set -x\ntrue", Some(ShellType::Bash));
++    let script = format!(
++        "{isolated}\ncase $- in\n  *x*) exit 42 ;;\nesac\n"
++    );
++    let output = std::process::Command::new("bash")
++        .args(["-c", &script])
++        .output()
++        .expect("bash should execute isolation regression test");
++
++    assert!(
++        output.status.success(),
++        "xtrace leaked outside isolated command: {}",
++        String::from_utf8_lossy(&output.stderr)
++    );
++}
++
++#[test]
++fn fish_command_is_escaped_before_subshell_execution() {
++    let command = "echo 'quoted' \\\\ path";
++    assert_eq!(
++        isolate_ai_requested_command(command, Some(ShellType::Fish)),
++        "command fish -c 'echo \\'quoted\\' \\\\\\\\ path'"
++    );
++}
++
+ /// Test to verify that blocks created through normal execution
+ /// have the correct local status set
+ #[test]

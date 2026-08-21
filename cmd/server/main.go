@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sasuke39/open-warp/internal/agent"
+	"github.com/sasuke39/open-warp/internal/agentruntime"
 	"github.com/sasuke39/open-warp/internal/config"
 	"github.com/sasuke39/open-warp/internal/llm"
 	"github.com/sasuke39/open-warp/internal/memory"
@@ -56,8 +58,10 @@ type Conversation struct {
 
 type Server struct {
 	mu               sync.RWMutex
+	runtimeMu        sync.RWMutex
 	conversations    map[string]*Conversation
 	runningTasks     sync.Map // taskID → context.CancelFunc
+	runtimeDriver    agentruntime.Driver
 	cfg              *config.Config
 	configPath       string
 	persistencePath  string
@@ -101,15 +105,22 @@ var supportedTools = map[string]struct{}{
 }
 
 func NewServer(cfg *config.Config, configPath string) *Server {
+	cfg = config.ApplyDefaults(cfg)
 	server := &Server{
 		conversations:   make(map[string]*Conversation),
-		cfg:             config.ApplyDefaults(cfg),
+		cfg:             cfg,
 		configPath:      configPath,
 		persistencePath: filepath.Join(filepath.Dir(configPath), "conversations.json"),
 		memoryWake:      make(chan struct{}, 1),
 		persistWake:     make(chan struct{}, 1),
 		persistDone:     make(chan struct{}),
 		stopCh:          make(chan struct{}),
+	}
+	if driver, err := configuredRuntimeDriver(cfg); err != nil {
+		server.lastConfigError = err.Error()
+		log.Printf("[RUNTIME] configuration failed: %v", err)
+	} else {
+		server.runtimeDriver = driver
 	}
 	if err := server.loadConversations(); err != nil {
 		log.Printf("Failed to load persisted conversations: %v", err)
@@ -301,13 +312,20 @@ func (s *Server) isConfigured() bool {
 
 func (s *Server) reloadConfig() settingsStatus {
 	cfg, err := config.LoadOrDefault(s.configPath)
+	cfg = config.ApplyDefaults(cfg)
+	newDriver, runtimeErr := configuredRuntimeDriver(cfg)
+
+	s.runtimeMu.Lock()
+	oldDriver := s.runtimeDriver
+	s.runtimeDriver = newDriver
+	s.runtimeMu.Unlock()
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.cfg = config.ApplyDefaults(cfg)
+	s.cfg = cfg
 	if err != nil {
 		s.lastConfigError = err.Error()
+	} else if runtimeErr != nil {
+		s.lastConfigError = runtimeErr.Error()
 	} else {
 		s.lastConfigError = ""
 	}
@@ -332,8 +350,50 @@ func (s *Server) reloadConfig() settingsStatus {
 	if s.lastConfigError != "" {
 		status.Error = s.lastConfigError
 	}
+	s.mu.Unlock()
+	if oldDriver != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if closeErr := oldDriver.Close(closeCtx); closeErr != nil {
+			log.Printf("[RUNTIME] failed to close replaced driver: %v", closeErr)
+		}
+		cancel()
+	}
 	log.Printf("[SERVER] reloadConfig configured=%v missing=%v error=%q", status.Configured, status.MissingFields, status.Error)
 	return status
+}
+
+func configuredRuntimeDriver(cfg *config.Config) (agentruntime.Driver, error) {
+	if cfg.AgentRuntime.Driver == "native" {
+		return nil, nil
+	}
+	env := append([]string(nil), os.Environ()...)
+	env = append(env,
+		"AGENT_RUNTIME_API_KEY="+cfg.APIKey,
+		"AGENT_RUNTIME_BASE_URL="+cfg.BaseURL,
+		"AGENT_RUNTIME_MODEL="+cfg.Model,
+		"AGENT_RUNTIME_THINKING_DISABLED="+strconv.FormatBool(cfg.ThinkingDisabled),
+	)
+	if cfg.MaxTokens > 0 {
+		env = append(env, "AGENT_RUNTIME_MAX_TOKENS="+strconv.Itoa(cfg.MaxTokens))
+	}
+	if cfg.AgentRuntime.Driver == "deepseek-harness" {
+		env = append(env,
+			"DEEPSEEK_API_KEY="+cfg.APIKey,
+			"DEEPSEEK_BASE_URL="+cfg.BaseURL,
+			"DSH_MODEL="+cfg.Model,
+			"DSH_PROVIDER=deepseek-official",
+			"DSH_THINKING_DISABLED="+strconv.FormatBool(cfg.ThinkingDisabled),
+		)
+		if cfg.MaxTokens > 0 {
+			env = append(env, "DSH_MAX_TOKENS="+strconv.Itoa(cfg.MaxTokens))
+		}
+	}
+	return agentruntime.NewProcessDriver(agentruntime.ProcessConfig{
+		Name:    cfg.AgentRuntime.Driver,
+		Command: cfg.AgentRuntime.Command,
+		Args:    append([]string(nil), cfg.AgentRuntime.Args...),
+		Env:     env,
+	})
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -363,11 +423,21 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid form data", http.StatusBadRequest)
 				return
 			}
+			s.mu.RLock()
+			preservedRuntime := s.cfg.AgentRuntime
+			preservedMemory := s.cfg.Memory
+			preservedMaxTokens := s.cfg.MaxTokens
+			preservedThinking := s.cfg.ThinkingDisabled
+			s.mu.RUnlock()
 			newCfg = config.Config{
-				Provider: r.FormValue("provider"),
-				BaseURL:  r.FormValue("base_url"),
-				APIKey:   r.FormValue("api_key"),
-				Model:    r.FormValue("model"),
+				Provider:         r.FormValue("provider"),
+				BaseURL:          r.FormValue("base_url"),
+				APIKey:           r.FormValue("api_key"),
+				Model:            r.FormValue("model"),
+				MaxTokens:        preservedMaxTokens,
+				ThinkingDisabled: preservedThinking,
+				AgentRuntime:     preservedRuntime,
+				Memory:           preservedMemory,
 				Server: config.ServerConfig{
 					Host: r.FormValue("host"),
 				},
@@ -1012,6 +1082,25 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("[REQ] input[%d] kind=%s tool_call_id=%s content=%q", i, in.Kind, in.ToolCallID, contentPreview)
 	}
+
+	// External runtimes own their conversation, compaction, retry, and agent
+	// loop state. Keep the native history untouched so switching drivers does
+	// not mix two incompatible histories.
+	s.runtimeMu.RLock()
+	runtimeDriver := s.runtimeDriver
+	if runtimeDriver != nil {
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		s.runningTasks.Store(taskID, cancel)
+		defer s.runningTasks.Delete(taskID)
+
+		s.runExternalAgent(ctx, runtimeDriver, w, flusher, conv, convID, requestID, taskID, inputs, req.GetInput().GetContext())
+		s.runtimeMu.RUnlock()
+		conv.mu.Unlock()
+		s.requestConversationSave()
+		return
+	}
+	s.runtimeMu.RUnlock()
 
 	// Feed inputs into conversation history
 	for _, in := range inputs {
@@ -2190,7 +2279,7 @@ func (s *Server) sendToolCalls(w io.Writer, flusher http.Flusher, conv *Conversa
 			}
 			tcMsg.Tool = &pb.Message_ToolCall_RunShellCommand_{
 				RunShellCommand: &pb.Message_ToolCall_RunShellCommand{
-					Command:      isolateShellCommand(args.Command),
+					Command:      args.Command,
 					IsReadOnly:   args.IsReadOnly,
 					IsRisky:      args.IsRisky,
 					RiskCategory: parseRiskCategory(args.RiskCategory),
@@ -2332,14 +2421,6 @@ func (s *Server) sendToolCalls(w io.Writer, flusher http.Flusher, conv *Conversa
 		},
 	})
 	return nil
-}
-
-// isolateShellCommand executes every model-generated command in a subshell.
-// Warp reuses an interactive shell for tool calls, so commands such as set -x,
-// set -e, cd, export, alias, and trap must not leak into Warp's shell hooks or
-// later tool calls. The subshell preserves stdout, stderr, and the exit status.
-func isolateShellCommand(command string) string {
-	return "(\n" + command + "\n)"
 }
 
 func parseRiskCategory(s string) pb.RiskCategory {

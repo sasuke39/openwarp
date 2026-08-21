@@ -336,6 +336,15 @@ func (s *Server) persistenceLoop() {
 }
 
 func (s *Server) closeBackground(ctx context.Context) error {
+	s.runtimeMu.Lock()
+	runtimeDriver := s.runtimeDriver
+	s.runtimeDriver = nil
+	s.runtimeMu.Unlock()
+	if runtimeDriver != nil {
+		if err := runtimeDriver.Close(ctx); err != nil {
+			return err
+		}
+	}
 	s.stopOnce.Do(func() { close(s.stopCh) })
 	if s.memoryCancel != nil {
 		s.memoryCancel()
