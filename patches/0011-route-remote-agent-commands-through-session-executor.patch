@@ -1,0 +1,111 @@
+diff --git a/app/src/ai/blocklist/action_model/execute/shell_command.rs b/app/src/ai/blocklist/action_model/execute/shell_command.rs
+index ac7bd0a..98fc197 100644
+--- a/app/src/ai/blocklist/action_model/execute/shell_command.rs
++++ b/app/src/ai/blocklist/action_model/execute/shell_command.rs
+@@ -212,6 +212,12 @@ impl ShellCommandExecutor {
+         input: ExecuteActionInput,
+         ctx: &mut ModelContext<Self>,
+     ) -> impl Into<AnyActionExecution> {
++        let active_session = self.active_session.as_ref(ctx).session(ctx);
++        let current_working_directory = self
++            .active_session
++            .as_ref(ctx)
++            .current_working_directory()
++            .cloned();
+         let model = self.terminal_model.lock();
+ 
+         // Determine the action we want to take based on the input.
+@@ -241,6 +247,64 @@ impl ShellCommandExecutor {
+                         RequestCommandOutputResult::CancelledBeforeExecution,
+                     ));
+                 }
++
++                // Completed commands in remote sessions must use the session's independent
++                // command executor. Running them through the visible PTY couples tool output to
++                // terminal block rendering; hidden Agent blocks can then report exit code 0 with
++                // empty output. The session executor selects RemoteServerCommandExecutor when the
++                // Warp remote server is available and RemoteCommandExecutor (SSH ControlMaster)
++                // otherwise. Keep long-running/interactive commands on the PTY so the Agent can
++                // continue polling and writing to them.
++                if *wait_until_completion {
++                    if let Some(session) =
++                        active_session.clone().filter(|session| !session.is_local())
++                    {
++                        let command = command.clone();
++                        let command_to_execute = command.clone();
++                        let command_for_result = command.clone();
++                        let current_working_directory = current_working_directory.clone();
++                        drop(model);
++
++                        return ActionExecution::new_async(
++                            async move {
++                                let result = session
++                                    .execute_command(
++                                        &command_to_execute,
++                                        current_working_directory.as_deref(),
++                                        None,
++                                        crate::terminal::model::session::ExecuteCommandOptions::default(),
++                                    )
++                                    .await;
++
++                                match result {
++                                    Ok(output) => {
++                                        let exit_code = output.exit_code().unwrap_or_else(|| {
++                                            ExitCode::from(if output.success() { 0 } else { 1 })
++                                        });
++                                        let output =
++                                            String::from_utf8_lossy(output.output()).into_owned();
++                                        ActionResult::CommandFinished {
++                                            block_id: BlockId::new(),
++                                            output,
++                                            exit_code,
++                                        }
++                                    }
++                                    Err(error) => ActionResult::CommandFinished {
++                                        block_id: BlockId::new(),
++                                        output: format!(
++                                            "Remote command execution failed: {error:#}"
++                                        ),
++                                        exit_code: ExitCode::from(1),
++                                    },
++                                }
++                            },
++                            move |result, _| {
++                                action_result_for_requested_command(command_for_result, result)
++                            },
++                        );
++                    }
++                }
++
+                 // If the command might use pager and can't be interacted with,
+                 // we pipe its output to cat so we can prevent activating the altscreen.
+                 // The parentheses here ensures the command always gets evaluated first.
+diff --git a/app/src/terminal/model/session/command_executor.rs b/app/src/terminal/model/session/command_executor.rs
+index 35bff02..4560dcd 100644
+--- a/app/src/terminal/model/session/command_executor.rs
++++ b/app/src/terminal/model/session/command_executor.rs
+@@ -167,19 +167,11 @@ fn new_command_executor_for_local_tty_session(
+ 
+     use super::IsLegacySSHSession;
+ 
+-    // When the remote server feature flag is enabled and the session is a
+-    // legacy SSH session, use the remote server executor *if* the manager
+-    // already has a live `Connected` client for this session.
+-    //
+-    // By construction this branch is only reached after
+-    // `ModelEventDispatcher::complete_bootstrapped_session` has gated on
+-    // both `Bootstrapped` and the remote-server setup result
+-    // (`RemoteServerReady` / `RemoteServerFailed` / skipped). So
+-    // `client_for_session` returning `Some` corresponds to a successful
+-    // setup and `None` corresponds to the skip / failure paths, where we
+-    // fall through to the existing ControlMaster-based
+-    // `RemoteCommandExecutor` below. This preserves the fallback behavior
+-    // described in specs/APP-3797.
++    // When the remote server is connected, use it for command execution.
++    // Otherwise fall through to the existing SSH ControlMaster executor. The
++    // in-band executor shares the interactive PTY and is not a safe fallback:
++    // cancelled generators may still emit late OSC results which can corrupt
++    // the output of the next command.
+     if FeatureFlag::SshRemoteServer.is_enabled() {
+         if let IsLegacySSHSession::Yes { .. } = &session_info.is_legacy_ssh_session {
+             let session_id = session_info.session_id;
