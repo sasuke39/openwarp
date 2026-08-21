@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,22 +52,30 @@ func TestFinishEventRunsDurableEnqueueFirst(t *testing.T) {
 	}
 }
 
-func TestIsolateShellCommandUsesSubshell(t *testing.T) {
-	got := isolateShellCommand("set -x\necho ok")
-	want := "(\nset -x\necho ok\n)"
-	if got != want {
-		t.Fatalf("unexpected isolated command:\n%s", got)
+func TestSendToolCallsPreservesOriginalShellCommandForDisplay(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	original := "echo hello; hostname; whoami; pwd"
+	err := (&Server{}).sendToolCalls(
+		recorder,
+		recorder,
+		&Conversation{},
+		"task-1",
+		[]llm.ToolCall{{
+			ID:   "call-1",
+			Name: "run_shell_command",
+			Args: json.RawMessage(`{"command":"echo hello; hostname; whoami; pwd"}`),
+		}},
+	)
+	if err != nil {
+		t.Fatalf("sendToolCalls returned an error: %v", err)
 	}
-}
 
-func TestIsolateShellCommandDoesNotLeakXtrace(t *testing.T) {
-	script := isolateShellCommand("set -x\ntrue") + `
-case $- in
-  *x*) exit 42 ;;
-esac
-`
-	if output, err := exec.Command("bash", "-c", script).CombinedOutput(); err != nil {
-		t.Fatalf("xtrace leaked outside isolated command: %v\n%s", err, output)
+	toolCalls := collectForwardedToolCalls(t, decodeResponseEvents(t, recorder.Body.String()))
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected one forwarded tool call, got %d", len(toolCalls))
+	}
+	if got := toolCalls[0].GetRunShellCommand().GetCommand(); got != original {
+		t.Fatalf("client must receive the original display command: got %q, want %q", got, original)
 	}
 }
 
