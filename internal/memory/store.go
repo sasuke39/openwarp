@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -92,10 +93,13 @@ func SanitizePathKey(path string) string {
 		p = p[len(vol):]
 	}
 	p = strings.ReplaceAll(p, string(filepath.Separator), "-")
+	// Request roots can contain spaces, dots, or platform-specific separators;
+	// normalize the final key to the same alphabet accepted by all memory APIs.
+	p = strings.ReplaceAll(p, "\\", "-")
 	if p == "" {
 		return "root"
 	}
-	return p
+	return SanitizeKey(p)
 }
 
 // SanitizeKey sanitizes a user-supplied key (conversation_id or project_key)
@@ -151,12 +155,36 @@ func (s *Store) AtomicWrite(rel string, data []byte) error {
 	// Use unique tmp file to avoid collisions between concurrent writes to different targets.
 	suffix, _ := randomHex(8)
 	tmp := target + ".tmp." + suffix
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("memory: cannot create tmp file: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("memory: cannot write tmp file: %w", err)
 	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("memory: cannot sync tmp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("memory: cannot close tmp file: %w", err)
+	}
 	if err := os.Rename(tmp, target); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return fmt.Errorf("memory: cannot rename tmp to target: %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		if dir, err := os.Open(filepath.Dir(target)); err == nil {
+			err = dir.Sync()
+			_ = dir.Close()
+			if err != nil {
+				return fmt.Errorf("memory: cannot sync parent directory: %w", err)
+			}
+		}
 	}
 	return nil
 }
@@ -227,6 +255,9 @@ func (s *Store) AppendEvent(e Event) error {
 	defer f.Close()
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		return fmt.Errorf("memory: cannot write event: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("memory: cannot sync event: %w", err)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -26,6 +27,29 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+type finishOrderingWriter struct {
+	t              *testing.T
+	beforeFinished *bool
+}
+
+func (w *finishOrderingWriter) Write(p []byte) (int, error) {
+	if !*w.beforeFinished {
+		w.t.Error("StreamFinished was written before durable enqueue callback")
+	}
+	return len(p), nil
+}
+
+func (*finishOrderingWriter) Flush() {}
+
+func TestFinishEventRunsDurableEnqueueFirst(t *testing.T) {
+	committed := false
+	ctx := context.WithValue(context.Background(), beforeAgentFinishKey{}, func() { committed = true })
+	w := &finishOrderingWriter{t: t, beforeFinished: &committed}
+	if ok := (&Server{}).finishSuccessfulAgentLoop(ctx, w, w); !ok || !committed {
+		t.Fatalf("finished=%v committed=%v", ok, committed)
+	}
 }
 
 func TestNormalizeConversationHistory_PrunesDanglingAssistantToolCallBeforeUserQuery(t *testing.T) {
@@ -146,6 +170,11 @@ func TestMemoryStatusResponseIncludesSessionAndProjectDetails(t *testing.T) {
 		},
 	}
 	s := NewServer(cfg, filepath.Join(dir, "config.yaml"))
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = s.closeBackground(ctx)
+	})
 
 	notes := memory.DefaultSessionNotes("Test Session")
 	notes = strings.Replace(notes, "# Worklog\n\n", "# Worklog\n- status endpoint test\n\n", 1)
@@ -169,6 +198,9 @@ func TestMemoryStatusResponseIncludesSessionAndProjectDetails(t *testing.T) {
 	}
 	if !got.Enabled || !got.SessionEnabled || !got.AutoEnabled {
 		t.Fatalf("expected memory flags to be enabled: %+v", got)
+	}
+	if !got.QueueAvailable {
+		t.Fatalf("expected durable memory queue to be available: %+v", got)
 	}
 	if got.BaseDir != dir || got.CurrentProjectKey != "project1" {
 		t.Fatalf("unexpected base/project: %+v", got)
@@ -402,6 +434,11 @@ func TestEndToEndAgentRequestUpdatesSessionAndProjectMemory(t *testing.T) {
 		},
 	}
 	s := NewServer(cfg, filepath.Join(dir, "config.yaml"))
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = s.closeBackground(ctx)
+	})
 	mockHTTP := &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -476,6 +513,21 @@ func TestEndToEndAgentRequestUpdatesSessionAndProjectMemory(t *testing.T) {
 
 	projectKey := memory.ProjectKeyFromRoot(workspaceRoot)
 	notesPath := filepath.Join(cfg.Memory.BaseDir, memory.SessionNotesRelPath("conv-e2e"))
+	workflowPath := filepath.Join(cfg.Memory.BaseDir, "projects", projectKey, "memory", "workflows.md")
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		notes, notesErr := os.ReadFile(notesPath)
+		workflow, workflowErr := os.ReadFile(workflowPath)
+		if notesErr == nil && workflowErr == nil &&
+			strings.Contains(string(notes), "project key should come from request root") &&
+			strings.Contains(string(workflow), "go run ./cmd/server") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("asynchronous memory worker did not finish: notes=%v workflow=%v", notesErr, workflowErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	notesData, err := os.ReadFile(notesPath)
 	if err != nil {
 		t.Fatalf("expected session notes: %v", err)
@@ -484,7 +536,6 @@ func TestEndToEndAgentRequestUpdatesSessionAndProjectMemory(t *testing.T) {
 		t.Fatalf("unexpected session notes content: %s", string(notesData))
 	}
 
-	workflowPath := filepath.Join(cfg.Memory.BaseDir, "projects", projectKey, "memory", "workflows.md")
 	workflowData, err := os.ReadFile(workflowPath)
 	if err != nil {
 		t.Fatalf("expected project workflows memory: %v", err)
@@ -513,5 +564,63 @@ func TestEndToEndAgentRequestUpdatesSessionAndProjectMemory(t *testing.T) {
 	}
 	if !strings.Contains(string(events), "session_memory_updated") || !strings.Contains(string(events), "project_memory_updated") {
 		t.Fatalf("expected both update events, got: %s", string(events))
+	}
+}
+
+func TestAgentResponseDoesNotWaitForMemoryExtractor(t *testing.T) {
+	dir := t.TempDir()
+	enabled, disabled := true, false
+	cfg := &config.Config{
+		Provider: "openai", BaseURL: "http://mock-llm.local/v1", APIKey: "test-key", Model: "test-model",
+		Memory: config.MemoryConfig{Enabled: &enabled, SessionEnabled: &enabled, AutoEnabled: &disabled, BaseDir: filepath.Join(dir, "memory")},
+	}
+	s := NewServer(cfg, filepath.Join(dir, "config.yaml"))
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = s.closeBackground(ctx)
+	})
+	mockHTTP := &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"stream":true`) {
+			payload := "data: {\"id\":\"stream\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n" +
+				"data: {\"id\":\"stream\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(payload)), Request: r}, nil
+		}
+		time.Sleep(500 * time.Millisecond)
+		notes := memory.DefaultSessionNotes("slow extractor")
+		encoded, _ := json.Marshal(notes)
+		payload := `{"id":"memory","object":"chat.completion","created":0,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":` + string(encoded) + `},"finish_reason":"stop"}]}`
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(payload)), Request: r}, nil
+	})}
+	s.conversations["conv-fast"] = &Conversation{client: llm.NewClientWithHTTPClient(cfg, mockHTTP), CreatedAt: time.Now().UTC()}
+
+	inputs := make([]*pb.Request_Input_UserInputs_UserInput, 4)
+	for i := range inputs {
+		inputs[i] = &pb.Request_Input_UserInputs_UserInput{Input: &pb.Request_Input_UserInputs_UserInput_UserQuery{UserQuery: &pb.Request_Input_UserQuery{Query: "remember this verified workflow"}}}
+	}
+	request := &pb.Request{
+		Input:    &pb.Request_Input{Context: &pb.InputContext{Directory: &pb.InputContext_Directory{Pwd: dir}}, Type: &pb.Request_Input_UserInputs_{UserInputs: &pb.Request_Input_UserInputs{Inputs: inputs}}},
+		Metadata: &pb.Request_Metadata{ConversationId: "conv-fast"},
+	}
+	raw, err := proto.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	recorder := httptest.NewRecorder()
+	s.handleAgentRequest(recorder, httptest.NewRequest(http.MethodPost, "/ai/multi-agent", bytes.NewReader(raw)))
+	if elapsed := time.Since(start); elapsed >= 300*time.Millisecond {
+		t.Fatalf("response waited for slow memory extractor: %s", elapsed)
+	}
+	if !strings.Contains(recorder.Body.String(), "StreamFinished") && recorder.Body.Len() == 0 {
+		t.Fatal("expected streamed response")
+	}
+	stats, err := s.memoryQueue.Stats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Pending+stats.Running == 0 {
+		t.Fatalf("expected durable async job, stats=%+v", stats)
 	}
 }

@@ -10,19 +10,19 @@ import (
 
 // SessionMeta tracks the last update cursor for session memory.
 type SessionMeta struct {
-	ConversationID   string    `json:"conversation_id"`
-	ProjectKey       string    `json:"project_key"`
-	LastMessageIndex int       `json:"last_message_index"`
-	LastHistoryChars int       `json:"last_history_chars"`
-	LastToolCallCount int      `json:"last_tool_call_count"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ConversationID    string    `json:"conversation_id"`
+	ProjectKey        string    `json:"project_key"`
+	LastMessageIndex  int       `json:"last_message_index"`
+	LastHistoryChars  int       `json:"last_history_chars"`
+	LastToolCallCount int       `json:"last_tool_call_count"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // SessionStats describes the current conversation state.
 type SessionStats struct {
-	MessageCount          int
-	HistoryChars          int
-	ToolCallCount         int
+	MessageCount             int
+	HistoryChars             int
+	ToolCallCount            int
 	LastAssistantHasToolCall bool
 }
 

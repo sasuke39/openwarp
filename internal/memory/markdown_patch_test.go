@@ -1,6 +1,9 @@
 package memory
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseMemoryPatch_InvalidJSON(t *testing.T) {
 	_, err := ParseMemoryPatch([]byte("{"))
@@ -131,5 +134,48 @@ func TestContainsSecret_True(t *testing.T) {
 func TestContainsSecret_False(t *testing.T) {
 	if ContainsSecret("just a normal line of text") {
 		t.Error("expected no secret detection")
+	}
+}
+
+func TestRedactSecrets(t *testing.T) {
+	input := "api_key: sk-" + "abc123def456ghi789jkl012mno"
+	got := RedactSecrets(input)
+	if ContainsSecret(got) || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("secret was not redacted: %q", got)
+	}
+}
+
+func TestPreparedProjectWritesAreIdempotentAndComposeSameFileUpdates(t *testing.T) {
+	store, err := NewStore(Config{BaseDir: t.TempDir()}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.InitProjectMemory("project-a"); err != nil {
+		t.Fatal(err)
+	}
+	patch := MemoryPatch{Updates: []MemoryUpdate{
+		{Path: "workflows.md", Mode: "append_bullet", Section: "Build", Content: "run go build ./..."},
+		{Path: "workflows.md", Mode: "append_bullet", Section: "Test", Content: "run go test ./..."},
+	}}
+	writes, err := store.PrepareProjectWrites("project-a", patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes=%d, want one composed file", len(writes))
+	}
+	for i := 0; i < 2; i++ {
+		if err := store.WritePreparedProject("project-a", writes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.ReadFile("projects/project-a/memory/workflows.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"run go build ./...", "run go test ./..."} {
+		if strings.Count(string(got), want) != 1 {
+			t.Fatalf("content %q count != 1 in:\n%s", want, got)
+		}
 	}
 }

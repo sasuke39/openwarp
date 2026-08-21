@@ -134,6 +134,16 @@ func ContainsSecret(content string) bool {
 	return false
 }
 
+// RedactSecrets removes known credential shapes before conversation evidence is
+// persisted in the durable extraction queue.
+func RedactSecrets(content string) string {
+	redacted := content
+	for _, pattern := range secretPatterns {
+		redacted = pattern.ReplaceAllString(redacted, "[REDACTED]")
+	}
+	return redacted
+}
+
 // findNextHeading returns the index of the next markdown heading or -1.
 func findNextHeading(s string) int {
 	for i := 0; i < len(s); i++ {
