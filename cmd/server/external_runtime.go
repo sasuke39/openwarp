@@ -58,6 +58,7 @@ func (s *Server) runExternalAgent(
 		TaskID:         taskID,
 		RequestID:      requestID,
 		SystemPrompt:   agent.WithExecutionContext(agent.SystemPrompt, executionContext),
+		WorkingDir:     externalRuntimeWorkingDir(executionContext),
 		Inputs:         runtimeInputs,
 		Metadata:       map[string]string{"driver": driver.Name(), "project_key": conv.ProjectKey},
 	}
@@ -132,7 +133,7 @@ func translateExternalToolCall(call agentruntime.ToolCall) (llm.ToolCall, error)
 			Workdir string `json:"workdir"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
-			return llm.ToolCall{}, fmt.Errorf("decode DSH bash call: %w", err)
+			return llm.ToolCall{}, fmt.Errorf("decode external bash call: %w", err)
 		}
 		command := args.Command
 		if strings.TrimSpace(args.Workdir) != "" {
@@ -148,7 +149,7 @@ func translateExternalToolCall(call agentruntime.ToolCall) (llm.ToolCall, error)
 			Limit    int    `json:"limit"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
-			return llm.ToolCall{}, fmt.Errorf("decode DSH read call: %w", err)
+			return llm.ToolCall{}, fmt.Errorf("decode external read call: %w", err)
 		}
 		if args.Offset <= 0 {
 			args.Offset = 1
@@ -165,10 +166,10 @@ func translateExternalToolCall(call agentruntime.ToolCall) (llm.ToolCall, error)
 			Content  string `json:"content"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
-			return llm.ToolCall{}, fmt.Errorf("decode DSH write call: %w", err)
+			return llm.ToolCall{}, fmt.Errorf("decode external write call: %w", err)
 		}
 		return marshal("apply_file_diffs", map[string]any{
-			"summary":   "DSH write " + args.FilePath,
+			"summary":   "External agent write " + args.FilePath,
 			"new_files": []any{map[string]string{"file_path": args.FilePath, "content": args.Content}},
 		})
 	case agentruntime.ToolWorkspaceEditFile:
@@ -178,10 +179,10 @@ func translateExternalToolCall(call agentruntime.ToolCall) (llm.ToolCall, error)
 			NewString string `json:"new_string"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
-			return llm.ToolCall{}, fmt.Errorf("decode DSH edit call: %w", err)
+			return llm.ToolCall{}, fmt.Errorf("decode external edit call: %w", err)
 		}
 		return marshal("apply_file_diffs", map[string]any{
-			"summary": "DSH edit " + args.FilePath,
+			"summary": "External agent edit " + args.FilePath,
 			"diffs":   []any{map[string]string{"file_path": args.FilePath, "search": args.OldString, "replace": args.NewString}},
 		})
 	case agentruntime.ToolWorkspaceGlob:
@@ -190,7 +191,7 @@ func translateExternalToolCall(call agentruntime.ToolCall) (llm.ToolCall, error)
 			Path    string `json:"path"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
-			return llm.ToolCall{}, fmt.Errorf("decode DSH glob call: %w", err)
+			return llm.ToolCall{}, fmt.Errorf("decode external glob call: %w", err)
 		}
 		return marshal("file_glob_v2", map[string]any{"patterns": []string{args.Pattern}, "search_dir": args.Path, "max_matches": 200})
 	case agentruntime.ToolWorkspaceGrep:
@@ -199,12 +200,19 @@ func translateExternalToolCall(call agentruntime.ToolCall) (llm.ToolCall, error)
 			Path    string `json:"path"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
-			return llm.ToolCall{}, fmt.Errorf("decode DSH grep call: %w", err)
+			return llm.ToolCall{}, fmt.Errorf("decode external grep call: %w", err)
 		}
 		return marshal("grep", map[string]any{"queries": []string{args.Pattern}, "path": args.Path})
 	default:
 		return llm.ToolCall{}, fmt.Errorf("external workspace tool %q has no Warp mapping", call.Name)
 	}
+}
+
+func externalRuntimeWorkingDir(input *pb.InputContext) string {
+	if input == nil || input.GetDirectory() == nil {
+		return ""
+	}
+	return strings.TrimSpace(input.GetDirectory().GetPwd())
 }
 
 func shellQuote(value string) string {

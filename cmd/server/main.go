@@ -376,6 +376,9 @@ func configuredRuntimeDriver(cfg *config.Config) (agentruntime.Driver, error) {
 	if cfg.MaxTokens > 0 {
 		env = append(env, "AGENT_RUNTIME_MAX_TOKENS="+strconv.Itoa(cfg.MaxTokens))
 	}
+	if cfg.Memory.ContextWindowTokens > 0 {
+		env = append(env, "AGENT_RUNTIME_CONTEXT_WINDOW="+strconv.Itoa(cfg.Memory.ContextWindowTokens))
+	}
 	if cfg.AgentRuntime.Driver == "deepseek-harness" {
 		env = append(env,
 			"DEEPSEEK_API_KEY="+cfg.APIKey,

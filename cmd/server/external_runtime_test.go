@@ -63,6 +63,16 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+func TestExternalRuntimeWorkingDir(t *testing.T) {
+	input := &pb.InputContext{Directory: &pb.InputContext_Directory{Pwd: "/opt/project"}}
+	if got := externalRuntimeWorkingDir(input); got != "/opt/project" {
+		t.Fatalf("working dir = %q, want /opt/project", got)
+	}
+	if got := externalRuntimeWorkingDir(nil); got != "" {
+		t.Fatalf("nil working dir = %q, want empty", got)
+	}
+}
+
 type externalRuntimeTestDriver struct{}
 
 func (externalRuntimeTestDriver) Name() string { return "test-runtime" }
