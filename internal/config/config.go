@@ -167,6 +167,9 @@ func MissingRequiredFields(cfg *Config) []string {
 	if cfg.AgentRuntime.Driver != "native" && strings.TrimSpace(cfg.AgentRuntime.Command) == "" {
 		missing = append(missing, "agent_runtime.command")
 	}
+	if (cfg.AgentRuntime.Driver == "pi-agent" || cfg.AgentRuntime.Driver == "deepseek-harness") && len(cfg.AgentRuntime.Args) == 0 {
+		missing = append(missing, "agent_runtime.args")
+	}
 	return missing
 }
 

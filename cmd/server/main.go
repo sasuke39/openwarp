@@ -432,6 +432,14 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			preservedMaxTokens := s.cfg.MaxTokens
 			preservedThinking := s.cfg.ThinkingDisabled
 			s.mu.RUnlock()
+			runtimeConfig := preservedRuntime
+			if _, submitted := r.Form["agent_runtime_driver"]; submitted {
+				runtimeConfig = config.RuntimeConfig{
+					Driver:  strings.TrimSpace(r.FormValue("agent_runtime_driver")),
+					Command: strings.TrimSpace(r.FormValue("agent_runtime_command")),
+					Args:    parseRuntimeArgs(r.FormValue("agent_runtime_args")),
+				}
+			}
 			newCfg = config.Config{
 				Provider:         r.FormValue("provider"),
 				BaseURL:          r.FormValue("base_url"),
@@ -439,7 +447,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				Model:            r.FormValue("model"),
 				MaxTokens:        preservedMaxTokens,
 				ThinkingDisabled: preservedThinking,
-				AgentRuntime:     preservedRuntime,
+				AgentRuntime:     runtimeConfig,
 				Memory:           preservedMemory,
 				Server: config.ServerConfig{
 					Host: r.FormValue("host"),
@@ -473,6 +481,16 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
+func parseRuntimeArgs(raw string) []string {
+	var args []string
+	for _, line := range strings.Split(raw, "\n") {
+		if arg := strings.TrimSpace(strings.TrimSuffix(line, "\r")); arg != "" {
+			args = append(args, arg)
+		}
+	}
+	return args
+}
+
 func (s *Server) handleSettingsStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
@@ -495,6 +513,7 @@ func (s *Server) renderSettingsHTML(w http.ResponseWriter) {
 	cfg := *config.ApplyDefaults(s.cfg)
 	s.mu.RUnlock()
 	statusJSON, _ := json.Marshal(status)
+	runtimeArgs := strings.Join(cfg.AgentRuntime.Args, "\n")
 	warningHTML := func() string {
 		var parts []string
 		if status.Error != "" {
@@ -628,7 +647,7 @@ h1{font-size:40px;line-height:1.05;margin:14px 0 12px}
 .warning-item strong{font-size:13px;color:#ffd0d0}
 .warning-item span{font-size:13px;color:#ffc1c1}
 label{display:block;margin:18px 0 8px;font-weight:600;color:#dbe6f4}
-input,select{
+input,select,textarea{
   width:100%%;
   padding:14px 15px;
   border-radius:14px;
@@ -638,7 +657,8 @@ input,select{
   font-size:15px;
   outline:none;
 }
-input:focus,select:focus{
+textarea{min-height:112px;resize:vertical;font-family:"SFMono-Regular",Consolas,monospace;line-height:1.5}
+input:focus,select:focus,textarea:focus{
   border-color:rgba(96,165,250,0.9);
   box-shadow:0 0 0 3px rgba(59,130,246,0.18);
 }
@@ -696,6 +716,42 @@ code{
   font-size:13px;
   color:#a5b4fc;
 }
+.tabs{
+  display:flex;
+  gap:6px;
+  padding:5px;
+  margin:-4px 0 24px;
+  border:1px solid var(--border);
+  border-radius:16px;
+  background:#0d1527;
+}
+.tab{
+  flex:1;
+  padding:11px 14px;
+  border-radius:11px;
+  background:transparent;
+  color:var(--muted);
+}
+.tab[aria-selected="true"]{
+  color:white;
+  background:linear-gradient(135deg,rgba(139,92,246,.7),rgba(37,99,235,.7));
+  box-shadow:0 6px 18px rgba(37,99,235,.18);
+}
+.tab-panel[hidden]{display:none}
+.harness-choice{
+  display:grid;
+  grid-template-columns:auto 1fr;
+  gap:12px;
+  align-items:start;
+  padding:14px;
+  margin-top:16px;
+  border:1px solid var(--border);
+  border-radius:16px;
+  background:var(--panel-soft);
+}
+.harness-dot{width:10px;height:10px;margin-top:5px;border-radius:50%%;background:var(--good);box-shadow:0 0 0 5px rgba(61,220,132,.1)}
+.harness-choice strong{display:block;margin-bottom:4px}
+.harness-choice span{color:var(--muted);font-size:13px;line-height:1.5}
 .footer{
   margin-top:22px;
   padding-top:18px;
@@ -738,6 +794,12 @@ code{
 
   <section class="layout">
     <form id="settings-form" class="card" method="post" action="/settings">
+      <div class="tabs" role="tablist" aria-label="Settings sections">
+        <button class="tab" type="button" id="connection-tab" role="tab" aria-selected="true" aria-controls="connection-panel">Connection</button>
+        <button class="tab" type="button" id="harness-tab" role="tab" aria-selected="false" aria-controls="harness-panel">Agent Harness</button>
+      </div>
+
+      <section class="tab-panel" id="connection-panel" role="tabpanel" aria-labelledby="connection-tab">
       <h2 class="section-title">Connection Settings</h2>
       <p class="section-copy">These values are stored locally and used by the helper service inside <code>WarpLocal.app</code>.</p>
 
@@ -769,6 +831,34 @@ code{
           <input type="number" name="port" value="%d" placeholder="18888">
         </div>
       </div>
+      </section>
+
+      <section class="tab-panel" id="harness-panel" role="tabpanel" aria-labelledby="harness-tab" hidden>
+        <h2 class="section-title">Agent Harness</h2>
+        <p class="section-copy">Choose which framework owns the agent loop, retry policy, compaction, and session state.</p>
+
+        <label for="agent-runtime-driver">Harness</label>
+        <select name="agent_runtime_driver" id="agent-runtime-driver">
+          %s
+        </select>
+        <div class="harness-choice">
+          <div class="harness-dot"></div>
+          <div>
+            <strong id="harness-title">Native OpenWarp</strong>
+            <span id="harness-copy">Uses the built-in Go agent loop. No Sidecar process is launched.</span>
+          </div>
+        </div>
+
+        <div id="external-runtime-fields">
+          <label for="agent-runtime-command">Runtime command</label>
+          <input type="text" name="agent_runtime_command" id="agent-runtime-command" value="%s" placeholder="node">
+          <div class="field-help">Executable used by ProcessDriver to launch the Sidecar. An absolute path is safest inside WarpLocal.app.</div>
+
+          <label for="agent-runtime-args">Runtime arguments</label>
+          <textarea name="agent_runtime_args" id="agent-runtime-args" spellcheck="false" placeholder="/absolute/path/to/integrations/pi-agent/dist/main.js">%s</textarea>
+          <div class="field-help">Enter one process argument per line. The first line is normally the Sidecar entry script.</div>
+        </div>
+      </section>
 
       <div class="actions">
         <button class="primary" type="submit">Save & Reload</button>
@@ -817,6 +907,62 @@ const presets = {
   "Ollama": { base_url: "http://localhost:11434/v1", model: "llama3" },
   "Custom": { base_url: "", model: "" }
 };
+const harnesses = {
+  "native": {
+    title: "Native OpenWarp",
+    copy: "Uses the built-in Go agent loop. No Sidecar process is launched."
+  },
+  "pi-agent": {
+    title: "Pi Agent",
+    copy: "Pi owns the agent loop, retry, compaction, and session state through the OpenWarp Sidecar protocol."
+  },
+  "deepseek-harness": {
+    title: "DeepSeek Harness",
+    copy: "DSH owns the agent loop, tools, subagents, compaction, and session state through its Sidecar."
+  },
+  "custom": {
+    title: "Custom Sidecar",
+    copy: "Launches any process that implements OpenWarp Agent Runtime Protocol v1."
+  }
+};
+
+const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+function selectTab(tab) {
+  for (const candidate of tabs) {
+    const active = candidate === tab;
+    candidate.setAttribute("aria-selected", String(active));
+    document.getElementById(candidate.getAttribute("aria-controls")).hidden = !active;
+  }
+}
+for (const tab of tabs) {
+  tab.addEventListener("click", () => selectTab(tab));
+  tab.addEventListener("keydown", event => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const offset = event.key === "ArrowRight" ? 1 : -1;
+    const next = tabs[(tabs.indexOf(tab) + offset + tabs.length) %% tabs.length];
+    next.focus();
+    selectTab(next);
+  });
+}
+
+function renderHarness() {
+  const driver = document.getElementById("agent-runtime-driver").value;
+  const harness = harnesses[driver] || harnesses.custom;
+  document.getElementById("harness-title").textContent = harness.title;
+  document.getElementById("harness-copy").textContent = harness.copy;
+  const external = driver !== "native";
+  document.getElementById("external-runtime-fields").hidden = !external;
+  const command = document.getElementById("agent-runtime-command");
+  command.required = external;
+  if (external && command.value.trim() === "") command.value = "node";
+  const args = document.getElementById("agent-runtime-args");
+  args.required = driver === "pi-agent" || driver === "deepseek-harness";
+  if (driver === "pi-agent") args.placeholder = "/absolute/path/to/integrations/pi-agent/dist/main.js";
+  else if (driver === "deepseek-harness") args.placeholder = "/absolute/path/to/integrations/deepseek-harness/dist/main.js";
+  else args.placeholder = "One Sidecar argument per line";
+}
+document.getElementById("agent-runtime-driver").addEventListener("change", renderHarness);
 document.getElementById("provider").addEventListener("change", (e) => {
   const preset = presets[e.target.value];
   if (preset) {
@@ -900,6 +1046,7 @@ document.getElementById("settings-form").addEventListener("submit", async (event
 });
 
 renderStatus(initialStatus);
+renderHarness();
 if (!initialStatus.configured) {
   document.getElementById("save-note").textContent = "Add your provider settings, then save to activate the local adapter.";
 }
@@ -913,9 +1060,33 @@ if (!initialStatus.configured) {
 		html.EscapeString(cfg.Model),
 		html.EscapeString(cfg.Server.Host),
 		cfg.Server.Port,
+		renderRuntimeDriverOptions(cfg.AgentRuntime.Driver),
+		html.EscapeString(cfg.AgentRuntime.Command),
+		html.EscapeString(runtimeArgs),
 		warningHTML,
 		string(statusJSON),
 	)
+}
+
+func renderRuntimeDriverOptions(selected string) string {
+	drivers := []struct {
+		value string
+		label string
+	}{
+		{value: "native", label: "Native OpenWarp"},
+		{value: "pi-agent", label: "Pi Agent"},
+		{value: "deepseek-harness", label: "DeepSeek Harness"},
+		{value: "custom", label: "Custom Sidecar"},
+	}
+	var b strings.Builder
+	for _, driver := range drivers {
+		selectedAttr := ""
+		if driver.value == selected {
+			selectedAttr = " selected"
+		}
+		fmt.Fprintf(&b, `<option%s value="%s">%s</option>`, selectedAttr, driver.value, driver.label)
+	}
+	return b.String()
 }
 
 func renderProviderOptions(selected string) string {

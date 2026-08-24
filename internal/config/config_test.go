@@ -46,7 +46,18 @@ func TestExternalRuntimeRequiresCommand(t *testing.T) {
 		},
 	})
 	missing := MissingRequiredFields(cfg)
-	if len(missing) != 1 || missing[0] != "agent_runtime.command" {
+	if len(missing) != 2 || missing[0] != "agent_runtime.command" || missing[1] != "agent_runtime.args" {
+		t.Fatalf("missing fields = %#v", missing)
+	}
+}
+
+func TestKnownAgentHarnessRequiresSidecarArgument(t *testing.T) {
+	cfg := ApplyDefaults(&Config{
+		Provider: "openai", BaseURL: "http://localhost/v1", APIKey: "test-key", Model: "test-model",
+		AgentRuntime: RuntimeConfig{Driver: "pi-agent", Command: "node"},
+	})
+	missing := MissingRequiredFields(cfg)
+	if len(missing) != 1 || missing[0] != "agent_runtime.args" {
 		t.Fatalf("missing fields = %#v", missing)
 	}
 }
