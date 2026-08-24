@@ -42,7 +42,7 @@ The app is currently unsigned. If it was downloaded through a browser, macOS may
 xattr -cr /Applications/WarpLocal.app
 ```
 
-## Settings page does not open
+## Local Adapter settings show offline
 
 Check whether the adapter helper is listening:
 
@@ -54,11 +54,7 @@ If nothing is listening, fully quit `WarpLocal.app` and open it again.
 
 ## AI requests fail with provider errors
 
-Open:
-
-```text
-http://127.0.0.1:18888/settings
-```
+Open WarpLocal's native **Settings → Local Adapter** page.
 
 Confirm:
 

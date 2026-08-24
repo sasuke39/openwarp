@@ -1,0 +1,1744 @@
+diff --git a/app/src/settings_view/local_adapter_page.rs b/app/src/settings_view/local_adapter_page.rs
+index fbae52c..5a8d9ba 100644
+--- a/app/src/settings_view/local_adapter_page.rs
++++ b/app/src/settings_view/local_adapter_page.rs
+@@ -1,39 +1,1102 @@
+-use super::{
+-    settings_page::{
+-        MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, PAGE_PADDING,
+-    },
+-    SettingsSection,
+-};
+-use crate::appearance::Appearance;
++use std::time::Duration;
++
++use serde::{Deserialize, Deserializer, Serialize};
+ use warp_core::channel::{Channel, ChannelState};
+ use warpui::{
+-    elements::{Container, Element, Flex, MouseStateHandle, ParentElement, Text},
++    elements::{
++        Container, CrossAxisAlignment, Element, Flex, MouseStateHandle, ParentElement, Text,
++    },
+     fonts::{Properties, Weight},
++    presenter::ChildView,
++    r#async::Timer,
+     ui_components::{
+         button::ButtonVariant,
+         components::{Coords, UiComponent, UiComponentStyles},
++        switch::SwitchStateHandle,
+     },
+     AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle,
+ };
+
+-#[derive(Debug, Clone)]
++use crate::appearance::Appearance;
++use crate::view_components::{
++    dropdown::{Dropdown, DropdownItem},
++    SubmittableTextInput, SubmittableTextInputEvent,
++};
++
++use super::{
++    settings_page::{
++        render_body_item, render_dropdown_item, render_sub_header, LocalOnlyIconState, MatchData,
++        PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
++    },
++    SettingsSection,
++};
++
++const ADAPTER_BASE_URL: &str = "http://127.0.0.1:18888";
++const REQUEST_TIMEOUT_SECS: u64 = 5;
++const INITIAL_CONNECT_ATTEMPTS: usize = 6;
++const INITIAL_CONNECT_RETRY_MS: u64 = 350;
++const CONTENT_FONT_SIZE: f32 = 12.;
++const ITEM_VERTICAL_SPACING: f32 = 24.;
++const SECTION_SPACING: f32 = 8.;
++
++// ---------------------------------------------------------------------------
++// Wire types matching the adapter's settings JSON API.
++// Field names mirror config.yaml keys (snake_case); see cmd/server/profiles.go.
++// ---------------------------------------------------------------------------
++
++/// Response of GET /settings/status (also the body of POST .../activate).
++#[derive(Debug, Clone, Default, Deserialize)]
++struct AdapterStatus {
++    #[serde(default)]
++    missing_fields: Vec<String>,
++    #[serde(default)]
++    error: String,
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++struct ServerConfig {
++    host: String,
++    port: i64,
++}
++
++impl Default for ServerConfig {
++    fn default() -> Self {
++        Self {
++            host: "127.0.0.1".to_owned(),
++            port: 18888,
++        }
++    }
++}
++
++/// The memory toggles are tri-state on the server (`*bool`): null means
++/// "fall back to the built-in default". They are preserved verbatim on save.
++#[derive(Debug, Clone, Default, Serialize, Deserialize)]
++struct MemoryConfig {
++    #[serde(default)]
++    enabled: Option<bool>,
++    #[serde(default)]
++    base_dir: String,
++    #[serde(default)]
++    session_enabled: Option<bool>,
++    #[serde(default)]
++    auto_enabled: Option<bool>,
++    #[serde(default)]
++    max_project_memories: i64,
++    #[serde(default)]
++    stale_after_hours: i64,
++    #[serde(default)]
++    context_window_tokens: i64,
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++struct AgentRuntimeConfig {
++    #[serde(default = "default_runtime_driver")]
++    driver: String,
++    #[serde(default)]
++    command: String,
++    #[serde(default, deserialize_with = "deserialize_nullable_runtime_args")]
++    args: Vec<String>,
++}
++
++fn deserialize_nullable_runtime_args<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
++where
++    D: Deserializer<'de>,
++{
++    Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
++}
++
++fn default_runtime_driver() -> String {
++    "native".to_owned()
++}
++
++impl Default for AgentRuntimeConfig {
++    fn default() -> Self {
++        Self {
++            driver: default_runtime_driver(),
++            command: String::new(),
++            args: Vec::new(),
++        }
++    }
++}
++
++/// Full profile/effective-config shape used by GET/POST /settings/profiles/*.
++#[derive(Debug, Clone, Default, Serialize, Deserialize)]
++struct AdapterConfig {
++    #[serde(default)]
++    provider: String,
++    #[serde(default)]
++    base_url: String,
++    #[serde(default)]
++    api_key: String,
++    #[serde(default)]
++    model: String,
++    #[serde(default)]
++    max_tokens: i64,
++    #[serde(default)]
++    thinking_disabled: bool,
++    #[serde(default)]
++    agent_runtime: AgentRuntimeConfig,
++    #[serde(default)]
++    server: ServerConfig,
++    #[serde(default)]
++    memory: MemoryConfig,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++struct ProfileEntry {
++    name: String,
++    #[serde(default)]
++    active: bool,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++struct ProfileListResponse {
++    #[serde(default)]
++    profiles: Vec<ProfileEntry>,
++}
++
++/// Everything the page needs to repaint after talking to the adapter.
++struct RefreshSnapshot {
++    status: AdapterStatus,
++    profiles: Vec<ProfileEntry>,
++    effective_config: AdapterConfig,
++}
++
++// ---------------------------------------------------------------------------
++// HTTP helpers. Every error is surfaced as a String; nothing here panics.
++// ---------------------------------------------------------------------------
++
++fn http_client() -> Result<reqwest::Client, String> {
++    reqwest::Client::builder()
++        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
++        .build()
++        .map_err(|err| format!("failed to create HTTP client: {err}"))
++}
++
++/// Extracts the server's `{"error": "..."}` body on non-2xx responses.
++async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response, String> {
++    if response.status().is_success() {
++        return Ok(response);
++    }
++    let status = response.status();
++    #[derive(Deserialize)]
++    struct ErrorBody {
++        error: String,
++    }
++    let message = match response.text().await {
++        Ok(body) => serde_json::from_str::<ErrorBody>(&body)
++            .map(|body| body.error)
++            .unwrap_or_else(|_| format!("HTTP {status}")),
++        Err(_) => format!("HTTP {status}"),
++    };
++    Err(message)
++}
++
++async fn get_json<T: serde::de::DeserializeOwned>(url: String) -> Result<T, String> {
++    let client = http_client()?;
++    let response = client
++        .get(url)
++        .send()
++        .await
++        .map_err(|err| err.to_string())?;
++    ensure_success(response)
++        .await?
++        .json::<T>()
++        .await
++        .map_err(|err| err.to_string())
++}
++
++async fn fetch_snapshot_once() -> Result<RefreshSnapshot, String> {
++    let status = get_json::<AdapterStatus>(format!("{ADAPTER_BASE_URL}/settings/status")).await?;
++    let profiles = get_json::<ProfileListResponse>(format!("{ADAPTER_BASE_URL}/settings/profiles"))
++        .await?
++        .profiles;
++    let effective_config =
++        get_json::<AdapterConfig>(format!("{ADAPTER_BASE_URL}/settings/config")).await?;
++    Ok(RefreshSnapshot {
++        status,
++        profiles,
++        effective_config,
++    })
++}
++
++async fn fetch_snapshot() -> Result<RefreshSnapshot, String> {
++    let mut last_error = String::new();
++    for attempt in 0..INITIAL_CONNECT_ATTEMPTS {
++        match fetch_snapshot_once().await {
++            Ok(snapshot) => return Ok(snapshot),
++            Err(err) => last_error = err,
++        }
++        if attempt + 1 < INITIAL_CONNECT_ATTEMPTS {
++            Timer::after(Duration::from_millis(INITIAL_CONNECT_RETRY_MS)).await;
++        }
++    }
++    Err(last_error)
++}
++
++async fn fetch_profile_config(name: String) -> Result<AdapterConfig, String> {
++    get_json(format!("{ADAPTER_BASE_URL}/settings/profiles/{name}")).await
++}
++
++async fn post_profile(name: String, config: AdapterConfig) -> Result<(), String> {
++    let client = http_client()?;
++    let response = client
++        .post(format!("{ADAPTER_BASE_URL}/settings/profiles/{name}"))
++        .json(&config)
++        .send()
++        .await
++        .map_err(|err| err.to_string())?;
++    ensure_success(response).await.map(|_| ())
++}
++
++async fn post_activate_profile(name: String) -> Result<AdapterStatus, String> {
++    let client = http_client()?;
++    let response = client
++        .post(format!(
++            "{ADAPTER_BASE_URL}/settings/profiles/{name}/activate"
++        ))
++        .send()
++        .await
++        .map_err(|err| err.to_string())?;
++    ensure_success(response)
++        .await?
++        .json::<AdapterStatus>()
++        .await
++        .map_err(|err| err.to_string())
++}
++
++async fn delete_profile(name: String) -> Result<(), String> {
++    let client = http_client()?;
++    let response = client
++        .delete(format!("{ADAPTER_BASE_URL}/settings/profiles/{name}"))
++        .send()
++        .await
++        .map_err(|err| err.to_string())?;
++    ensure_success(response).await.map(|_| ())
++}
++
++// ---------------------------------------------------------------------------
++// Provider presets supported by Local Adapter profiles.
++// ---------------------------------------------------------------------------
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum ProviderPreset {
++    OpenAI,
++    DeepSeek,
++    Ollama,
++    Custom,
++}
++
++impl ProviderPreset {
++    fn all() -> [Self; 4] {
++        [Self::OpenAI, Self::DeepSeek, Self::Ollama, Self::Custom]
++    }
++
++    fn label(self) -> &'static str {
++        match self {
++            Self::OpenAI => "OpenAI",
++            Self::DeepSeek => "DeepSeek",
++            Self::Ollama => "Ollama",
++            Self::Custom => "Custom",
++        }
++    }
++
++    fn base_url(self) -> &'static str {
++        match self {
++            Self::OpenAI => "https://api.openai.com/v1",
++            Self::DeepSeek => "https://api.deepseek.com",
++            Self::Ollama => "http://localhost:11434/v1",
++            Self::Custom => "",
++        }
++    }
++
++    fn model(self) -> &'static str {
++        match self {
++            Self::OpenAI => "gpt-4.1-mini",
++            Self::DeepSeek => "deepseek-chat",
++            Self::Ollama => "llama3",
++            Self::Custom => "",
++        }
++    }
++
++    /// Maps a stored provider string back to a preset for the dropdown echo.
++    /// Unknown values fall back to Custom.
++    fn from_stored(provider: &str) -> Self {
++        Self::all()
++            .into_iter()
++            .find(|preset| preset.label().eq_ignore_ascii_case(provider))
++            .unwrap_or(Self::Custom)
++    }
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum HarnessPreset {
++    Native,
++    PiAgent,
++    DeepSeekHarness,
++    Custom,
++}
++
++impl HarnessPreset {
++    fn all() -> [Self; 4] {
++        [
++            Self::Native,
++            Self::PiAgent,
++            Self::DeepSeekHarness,
++            Self::Custom,
++        ]
++    }
++
++    fn label(self) -> &'static str {
++        match self {
++            Self::Native => "Native OpenWarp",
++            Self::PiAgent => "Pi Agent",
++            Self::DeepSeekHarness => "DeepSeek Harness",
++            Self::Custom => "Custom Sidecar",
++        }
++    }
++
++    fn driver(self) -> &'static str {
++        match self {
++            Self::Native => "native",
++            Self::PiAgent => "pi-agent",
++            Self::DeepSeekHarness => "deepseek-harness",
++            Self::Custom => "custom",
++        }
++    }
++
++    fn description(self) -> &'static str {
++        match self {
++            Self::Native => "使用 OpenWarp 内置 Go Agent Loop，不启动 Sidecar。",
++            Self::PiAgent => "由 Pi 管理 Agent Loop、重试、压缩和会话状态。",
++            Self::DeepSeekHarness => {
++                "由 DeepSeek Harness 管理 Agent Loop、工具、子 Agent 和会话状态。"
++            }
++            Self::Custom => "启动实现 OpenWarp Agent Runtime Protocol v1 的自定义 Sidecar。",
++        }
++    }
++
++    fn from_stored(driver: &str) -> Self {
++        Self::all()
++            .into_iter()
++            .find(|preset| preset.driver() == driver)
++            .unwrap_or(Self::Custom)
++    }
++
++    fn bundled_runtime_config(self) -> Option<AgentRuntimeConfig> {
++        let resource_dir = match self {
++            Self::PiAgent => "pi-runtime",
++            Self::DeepSeekHarness => "dsh-runtime",
++            _ => return None,
++        };
++        let executable = std::env::current_exe().ok()?;
++        let macos_dir = executable.parent()?;
++        if macos_dir.file_name()?.to_str()? != "MacOS" {
++            return None;
++        }
++        let contents_dir = macos_dir.parent()?;
++        Some(AgentRuntimeConfig {
++            driver: self.driver().to_owned(),
++            command: contents_dir
++                .join("Helpers")
++                .join("node-runtime")
++                .to_string_lossy()
++                .into_owned(),
++            args: vec![contents_dir
++                .join("Resources")
++                .join(resource_dir)
++                .join("dist")
++                .join("main.js")
++                .to_string_lossy()
++                .into_owned()],
++        })
++    }
++}
++
++/// Mirrors the adapter's profileNameRE: letters, digits, '-', '_' and Han
++/// characters, at most 64 runes (`char::is_alphanumeric` covers Han).
++fn is_valid_profile_name(name: &str) -> bool {
++    !name.is_empty()
++        && name.chars().count() <= 64
++        && name
++            .chars()
++            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
++}
++
++#[derive(Debug, Clone, PartialEq)]
+ pub enum LocalAdapterSettingsPageAction {
+-    OpenSettingsUI,
+-    OpenStatusJSON,
++    /// Dispatched by the profile dropdown. Selecting only loads the profile
++    /// into the form; it never activates anything.
++    SelectProfile(String),
++    /// Dispatched by the provider preset dropdown.
++    SetProvider(ProviderPreset),
++    /// Dispatched by the Agent Harness dropdown.
++    SetHarness(HarnessPreset),
++    ToggleThinkingDisabled,
++    /// Activate the selected profile (write to config.yaml + hot reload).
++    ActivateSelected,
++    /// Delete the selected profile. The first click arms a confirmation, the
++    /// second click actually deletes.
++    DeleteSelected,
++    /// Save the form into the selected profile.
++    SaveToSelected,
++    /// Reveal the inline "save as new profile" name row.
++    ShowSaveAsNew,
++    /// Confirm the inline "save as new profile" row.
++    ConfirmSaveAsNew,
++    /// Collapse the inline "save as new profile" row.
++    CancelSaveAsNew,
++    Refresh,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum ConnectionState {
++    Loading,
++    Online,
++    Offline,
++}
++
++#[derive(Debug, Clone)]
++struct StatusMessage {
++    text: String,
++    is_error: bool,
++}
++
++impl StatusMessage {
++    fn info(text: impl Into<String>) -> Self {
++        Self {
++            text: text.into(),
++            is_error: false,
++        }
++    }
++
++    fn error(text: impl Into<String>) -> Self {
++        Self {
++            text: text.into(),
++            is_error: true,
++        }
++    }
+ }
+
+ pub struct LocalAdapterSettingsPageView {
+     page: PageType<Self>,
++    connection: ConnectionState,
++    status: Option<AdapterStatus>,
++    effective_model: Option<String>,
++    profiles: Vec<ProfileEntry>,
++    selected_profile: Option<String>,
++    provider: ProviderPreset,
++    harness: HarnessPreset,
++    thinking_disabled: bool,
++    /// Portions of the loaded config that the form does not edit; they are
++    /// written back untouched on save.
++    server_config: ServerConfig,
++    memory_config: MemoryConfig,
++    /// Whether the form has been populated from the adapter at least once.
++    /// Guards against refresh clobbering in-progress edits.
++    form_loaded: bool,
++    busy: bool,
++    status_message: Option<StatusMessage>,
++    /// Set when the user clicked Delete once; a second click confirms.
++    pending_delete_confirmation: Option<String>,
++    /// Whether the inline "save as new profile" name row is visible.
++    save_as_new_expanded: bool,
++    profile_dropdown: ViewHandle<Dropdown<LocalAdapterSettingsPageAction>>,
++    provider_dropdown: ViewHandle<Dropdown<LocalAdapterSettingsPageAction>>,
++    harness_dropdown: ViewHandle<Dropdown<LocalAdapterSettingsPageAction>>,
++    new_profile_input: ViewHandle<SubmittableTextInput>,
++    base_url_input: ViewHandle<SubmittableTextInput>,
++    api_key_input: ViewHandle<SubmittableTextInput>,
++    model_input: ViewHandle<SubmittableTextInput>,
++    max_tokens_input: ViewHandle<SubmittableTextInput>,
++    runtime_command_input: ViewHandle<SubmittableTextInput>,
++    runtime_args_input: ViewHandle<SubmittableTextInput>,
+ }
+
++// IMPORTANT — warpui re-entrancy rule this page must follow:
++// `AppContext::dispatch_typed_action` removes the handling view from the view
++// map while its handler runs (crates/warpui_core/src/core/app.rs), and
++// `ViewHandle::update` panics with "Circular view update" when the target view
++// is not in the map. The dropdowns dispatch SelectProfile/SetProvider/SetHarness
++// synchronously from inside their own action handler, so while our
++// `handle_action` runs for those actions, the dispatching Dropdown is NOT in
++// the view map. Therefore `handle_action` must never synchronously call
++// `.update()` on the dropdowns — the dropdown already echoes the user's click
++// itself via the deferred `MenuEvent::ItemSelected`, and programmatic re-sync
++// happens from async completion callbacks (`ctx.spawn`), which always run
++// after the dispatch has unwound and all views are back in the map.
++// Text inputs are safe to update from anywhere: they only ever *emit* events
++// (deferred through `pending_effects`), they never synchronously dispatch this
++// page's actions.
+ impl LocalAdapterSettingsPageView {
+-    pub fn new(_ctx: &mut ViewContext<Self>) -> Self {
+-        Self {
++    pub fn new(ctx: &mut ViewContext<Self>) -> Self {
++        let profile_dropdown = ctx.add_typed_action_view(Dropdown::new);
++
++        let provider_dropdown = ctx.add_typed_action_view(|ctx| {
++            let mut dropdown = Dropdown::new(ctx);
++            dropdown.set_items(
++                ProviderPreset::all()
++                    .iter()
++                    .map(|preset| {
++                        DropdownItem::new(
++                            preset.label(),
++                            LocalAdapterSettingsPageAction::SetProvider(*preset),
++                        )
++                    })
++                    .collect(),
++                ctx,
++            );
++            dropdown.set_selected_by_action(
++                LocalAdapterSettingsPageAction::SetProvider(ProviderPreset::Custom),
++                ctx,
++            );
++            dropdown
++        });
++
++        let harness_dropdown = ctx.add_typed_action_view(|ctx| {
++            let mut dropdown = Dropdown::new(ctx);
++            dropdown.set_items(
++                HarnessPreset::all()
++                    .iter()
++                    .map(|preset| {
++                        DropdownItem::new(
++                            preset.label(),
++                            LocalAdapterSettingsPageAction::SetHarness(*preset),
++                        )
++                    })
++                    .collect(),
++                ctx,
++            );
++            dropdown.set_selected_by_action(
++                LocalAdapterSettingsPageAction::SetHarness(HarnessPreset::Native),
++                ctx,
++            );
++            dropdown
++        });
++
++        let new_profile_input = ctx.add_typed_action_view(|ctx| {
++            let mut input = SubmittableTextInput::new(ctx).validate_on_edit(is_valid_profile_name);
++            input.set_placeholder_text("配置名称(字母/数字/-/_,可用中文)", ctx);
++            input
++        });
++        ctx.subscribe_to_view(&new_profile_input, |me, _, event, ctx| {
++            if let SubmittableTextInputEvent::Submit(name) = event {
++                me.save_as_new_profile(name.clone(), ctx);
++            }
++        });
++
++        let base_url_input = Self::build_form_input(ctx, "https://api.openai.com/v1");
++        let api_key_input = Self::build_form_input(ctx, "sk-...");
++        let model_input = Self::build_form_input(ctx, "模型名称");
++        let max_tokens_input = ctx.add_typed_action_view(|ctx| {
++            let mut input = SubmittableTextInput::new(ctx)
++                .validate_on_edit(|text| text.trim().parse::<i64>().is_ok_and(|value| value >= 0));
++            input.set_placeholder_text("32768", ctx);
++            input
++        });
++        Self::subscribe_form_input(ctx, &max_tokens_input);
++        let runtime_command_input = Self::build_form_input(ctx, "/path/to/node");
++        let runtime_args_input = Self::build_form_input(ctx, "[\"/path/to/sidecar/dist/main.js\"]");
++
++        let mut view = Self {
+             page: PageType::new_uncategorized(
+-                vec![Box::new(LocalAdapterOverviewWidget::default())],
++                vec![
++                    Box::new(LocalAdapterStatusWidget::default()),
++                    Box::new(LocalAdapterProfilesWidget::default()),
++                    Box::new(LocalAdapterConfigWidget::default()),
++                    Box::new(LocalAdapterHarnessWidget),
++                    Box::new(LocalAdapterSaveWidget::default()),
++                ],
+                 None,
+             ),
++            connection: ConnectionState::Loading,
++            status: None,
++            effective_model: None,
++            profiles: Vec::new(),
++            selected_profile: None,
++            provider: ProviderPreset::Custom,
++            harness: HarnessPreset::Native,
++            thinking_disabled: false,
++            server_config: ServerConfig::default(),
++            memory_config: MemoryConfig::default(),
++            form_loaded: false,
++            busy: false,
++            status_message: None,
++            pending_delete_confirmation: None,
++            save_as_new_expanded: false,
++            profile_dropdown,
++            provider_dropdown,
++            harness_dropdown,
++            new_profile_input,
++            base_url_input,
++            api_key_input,
++            model_input,
++            max_tokens_input,
++            runtime_command_input,
++            runtime_args_input,
++        };
++        view.refresh(ctx);
++        view
++    }
++
++    /// Form fields keep their contents until an explicit save, so subscribing
++    /// restores the buffer after SubmittableTextInput's built-in
++    /// clear-on-submit (Enter key) behavior. Subscriptions run deferred via
++    /// `pending_effects`, so updating the input here cannot re-enter it.
++    fn build_form_input(
++        ctx: &mut ViewContext<Self>,
++        placeholder: &str,
++    ) -> ViewHandle<SubmittableTextInput> {
++        let input = ctx.add_typed_action_view(|ctx| {
++            let mut input = SubmittableTextInput::new(ctx);
++            input.set_placeholder_text(placeholder, ctx);
++            input
++        });
++        Self::subscribe_form_input(ctx, &input);
++        input
++    }
++
++    fn subscribe_form_input(ctx: &mut ViewContext<Self>, input: &ViewHandle<SubmittableTextInput>) {
++        let input_handle = input.clone();
++        ctx.subscribe_to_view(input, move |_, _, event, ctx| {
++            if let SubmittableTextInputEvent::Submit(content) = event {
++                let content = content.clone();
++                input_handle.update(ctx, |input, ctx| {
++                    input.editor().update(ctx, |editor, ctx| {
++                        editor.set_buffer_text(&content, ctx);
++                    });
++                });
++            }
++        });
++    }
++
++    fn set_input_text(
++        input: &ViewHandle<SubmittableTextInput>,
++        text: &str,
++        ctx: &mut ViewContext<Self>,
++    ) {
++        input.update(ctx, |input, ctx| {
++            input.editor().update(ctx, |editor, ctx| {
++                editor.set_buffer_text(text, ctx);
++            });
++        });
++    }
++
++    fn input_text(input: &ViewHandle<SubmittableTextInput>, ctx: &ViewContext<Self>) -> String {
++        input.read(ctx, |input, app| {
++            input
++                .editor()
++                .read(app, |editor, app| editor.buffer_text(app).trim().to_owned())
++        })
++    }
++
++    /// Collects the form into a full config, preserving the server and memory
++    /// sections exactly as they were loaded from the adapter.
++    fn config_from_form(&self, ctx: &ViewContext<Self>) -> Result<AdapterConfig, String> {
++        let max_tokens_text = Self::input_text(&self.max_tokens_input, ctx);
++        let max_tokens = if max_tokens_text.is_empty() {
++            0
++        } else {
++            max_tokens_text
++                .parse::<i64>()
++                .ok()
++                .filter(|value| *value >= 0)
++                .ok_or_else(|| "Max Tokens 必须是非负整数。".to_owned())?
++        };
++        let runtime_command = Self::input_text(&self.runtime_command_input, ctx);
++        let runtime_args_text = Self::input_text(&self.runtime_args_input, ctx);
++        let runtime_args = if runtime_args_text.is_empty() {
++            Vec::new()
++        } else {
++            serde_json::from_str::<Vec<String>>(&runtime_args_text)
++                .map_err(|err| format!("Runtime arguments 必须是 JSON 字符串数组：{err}"))?
++        };
++        if self.harness != HarnessPreset::Native && runtime_command.is_empty() {
++            return Err("外部 Agent Harness 必须配置 Runtime command。".to_owned());
++        }
++        if matches!(
++            self.harness,
++            HarnessPreset::PiAgent | HarnessPreset::DeepSeekHarness
++        ) && runtime_args.is_empty()
++        {
++            return Err("Pi 和 DeepSeek Harness 必须配置 Sidecar 启动参数。".to_owned());
++        }
++        Ok(AdapterConfig {
++            provider: self.provider.label().to_owned(),
++            base_url: Self::input_text(&self.base_url_input, ctx),
++            api_key: Self::input_text(&self.api_key_input, ctx),
++            model: Self::input_text(&self.model_input, ctx),
++            max_tokens,
++            thinking_disabled: self.thinking_disabled,
++            agent_runtime: AgentRuntimeConfig {
++                driver: self.harness.driver().to_owned(),
++                command: runtime_command,
++                args: runtime_args,
++            },
++            server: self.server_config.clone(),
++            memory: self.memory_config.clone(),
++        })
++    }
++
++    /// Only call this from contexts where no dispatch is in flight (view
++    /// construction, `ctx.spawn` completion callbacks): it updates the
++    /// provider dropdown view, see the re-entrancy note on the impl block.
++    fn apply_config_to_form(&mut self, config: AdapterConfig, ctx: &mut ViewContext<Self>) {
++        self.provider = ProviderPreset::from_stored(&config.provider);
++        self.provider_dropdown.update(ctx, |dropdown, ctx| {
++            dropdown.set_selected_by_action(
++                LocalAdapterSettingsPageAction::SetProvider(self.provider),
++                ctx,
++            );
++        });
++        Self::set_input_text(&self.base_url_input, &config.base_url, ctx);
++        Self::set_input_text(&self.api_key_input, &config.api_key, ctx);
++        Self::set_input_text(&self.model_input, &config.model, ctx);
++        Self::set_input_text(&self.max_tokens_input, &config.max_tokens.to_string(), ctx);
++        self.harness = HarnessPreset::from_stored(&config.agent_runtime.driver);
++        let runtime = self
++            .harness
++            .bundled_runtime_config()
++            .unwrap_or(config.agent_runtime);
++        self.harness_dropdown.update(ctx, |dropdown, ctx| {
++            dropdown.set_selected_by_action(
++                LocalAdapterSettingsPageAction::SetHarness(self.harness),
++                ctx,
++            );
++        });
++        Self::set_input_text(&self.runtime_command_input, &runtime.command, ctx);
++        let runtime_args = serde_json::to_string(&runtime.args).unwrap_or_else(|_| "[]".to_owned());
++        Self::set_input_text(&self.runtime_args_input, &runtime_args, ctx);
++        self.thinking_disabled = config.thinking_disabled;
++        self.server_config = config.server;
++        self.memory_config = config.memory;
++    }
++
++    /// Only call this from contexts where no dispatch is in flight (view
++    /// construction, `ctx.spawn` completion callbacks), see the re-entrancy
++    /// note on the impl block.
++    fn update_profile_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
++        let items = self
++            .profiles
++            .iter()
++            .map(|profile| {
++                let display_text = if profile.active {
++                    format!("{}(当前生效)", profile.name)
++                } else {
++                    profile.name.clone()
++                };
++                DropdownItem::new(
++                    display_text,
++                    LocalAdapterSettingsPageAction::SelectProfile(profile.name.clone()),
++                )
++            })
++            .collect();
++        let selected = self.selected_profile.clone();
++        self.profile_dropdown.update(ctx, |dropdown, ctx| {
++            dropdown.set_items(items, ctx);
++            if let Some(selected) = selected {
++                dropdown.set_selected_by_action(
++                    LocalAdapterSettingsPageAction::SelectProfile(selected),
++                    ctx,
++                );
++            } else {
++                dropdown.set_selected_to_none(ctx);
++            }
++        });
++    }
++
++    fn active_profile_name(&self) -> Option<String> {
++        self.profiles
++            .iter()
++            .find(|profile| profile.active)
++            .map(|profile| profile.name.clone())
++    }
++
++    /// Fetches status, profile list and the effective config in one go.
++    fn refresh(&mut self, ctx: &mut ViewContext<Self>) {
++        if self.busy {
++            return;
++        }
++        self.busy = true;
++        ctx.notify();
++        ctx.spawn(fetch_snapshot(), |me, result, ctx| {
++            me.busy = false;
++            match result {
++                Ok(snapshot) => {
++                    me.connection = ConnectionState::Online;
++                    me.effective_model = if snapshot.effective_config.model.is_empty() {
++                        None
++                    } else {
++                        Some(snapshot.effective_config.model.clone())
++                    };
++                    me.status = Some(snapshot.status);
++                    me.profiles = snapshot.profiles;
++                    // Drop the selection if the profile no longer exists.
++                    if me.selected_profile.as_ref().is_some_and(|selected| {
++                        !me.profiles.iter().any(|profile| profile.name == *selected)
++                    }) {
++                        me.selected_profile = None;
++                    }
++                    me.update_profile_dropdown(ctx);
++                    // Prefill the form once: prefer the active profile, falling
++                    // back to the currently effective config.
++                    if !me.form_loaded {
++                        if let Some(active) = me.active_profile_name() {
++                            me.load_profile(active, ctx);
++                        } else {
++                            me.apply_config_to_form(snapshot.effective_config, ctx);
++                            me.form_loaded = true;
++                        }
++                    }
++                }
++                Err(err) => {
++                    log::warn!("Local adapter settings refresh failed: {err}");
++                    me.connection = ConnectionState::Offline;
++                    me.status = None;
++                    me.status_message = Some(StatusMessage::error(format!(
++                        "读取 adapter 状态或配置失败:{err}"
++                    )));
++                }
++            }
++            ctx.notify();
++        });
++    }
++
++    fn load_profile(&mut self, name: String, ctx: &mut ViewContext<Self>) {
++        if self.busy {
++            return;
++        }
++        self.busy = true;
++        ctx.notify();
++        ctx.spawn(
++            fetch_profile_config(name.clone()),
++            move |me, result, ctx| {
++                me.busy = false;
++                match result {
++                    Ok(config) => {
++                        me.apply_config_to_form(config, ctx);
++                        me.selected_profile = Some(name);
++                        me.form_loaded = true;
++                        me.pending_delete_confirmation = None;
++                        me.update_profile_dropdown(ctx);
++                    }
++                    Err(err) => {
++                        me.status_message = Some(StatusMessage::error(format!(
++                            "加载配置「{name}」失败:{err}"
++                        )));
++                    }
++                }
++                ctx.notify();
++            },
++        );
++    }
++
++    /// Selecting a profile only loads it into the form — nothing takes effect
++    /// until the user clicks 启用.
++    fn select_profile(&mut self, name: String, ctx: &mut ViewContext<Self>) {
++        self.pending_delete_confirmation = None;
++        self.selected_profile = Some(name.clone());
++        // The dropdown echoes the click by itself; do not touch it here (see
++        // the re-entrancy note on the impl block).
++        if !self.busy {
++            self.load_profile(name, ctx);
++        }
++        ctx.notify();
++    }
++
++    fn set_provider(&mut self, preset: ProviderPreset, ctx: &mut ViewContext<Self>) {
++        self.provider = preset;
++        // Prefill the preset's endpoint and model, but never touch the API key.
++        // The provider dropdown echoes the click by itself; do not touch it
++        // here (see the re-entrancy note on the impl block).
++        if preset != ProviderPreset::Custom {
++            Self::set_input_text(&self.base_url_input, preset.base_url(), ctx);
++            Self::set_input_text(&self.model_input, preset.model(), ctx);
++        }
++        ctx.notify();
++    }
++
++    fn set_harness(&mut self, preset: HarnessPreset, ctx: &mut ViewContext<Self>) {
++        self.harness = preset;
++        if let Some(runtime) = preset.bundled_runtime_config() {
++            Self::set_input_text(&self.runtime_command_input, &runtime.command, ctx);
++            let args = serde_json::to_string(&runtime.args).unwrap_or_else(|_| "[]".to_owned());
++            Self::set_input_text(&self.runtime_args_input, &args, ctx);
++        }
++        // The dropdown echoes the click by itself; do not update it
++        // synchronously here (see the re-entrancy note on the impl block).
++        ctx.notify();
++    }
++
++    fn activate_selected(&mut self, ctx: &mut ViewContext<Self>) {
++        if self.busy {
++            return;
++        }
++        let Some(name) = self.selected_profile.clone() else {
++            self.status_message = Some(StatusMessage::error("请先在下拉框中选择一个配置。"));
++            ctx.notify();
++            return;
++        };
++        self.busy = true;
++        self.status_message = None;
++        ctx.notify();
++        ctx.spawn(
++            post_activate_profile(name.clone()),
++            move |me, result, ctx| {
++                me.busy = false;
++                match result {
++                    Ok(status) => {
++                        me.status = Some(status);
++                        me.status_message =
++                            Some(StatusMessage::info(format!("已启用「{name}」。")));
++                        // Pull the fresh effective config so the status section
++                        // shows the newly activated model/profile.
++                        me.refresh(ctx);
++                    }
++                    Err(err) => {
++                        me.status_message =
++                            Some(StatusMessage::error(format!("启用「{name}」失败:{err}")));
++                    }
++                }
++                ctx.notify();
++            },
++        );
++    }
++
++    fn delete_selected(&mut self, ctx: &mut ViewContext<Self>) {
++        if self.busy {
++            return;
++        }
++        let Some(name) = self.selected_profile.clone() else {
++            self.status_message = Some(StatusMessage::error("请先在下拉框中选择一个配置。"));
++            ctx.notify();
++            return;
++        };
++        // Deleting is destructive, so the first click only arms the button and
++        // the second click actually deletes.
++        if self.pending_delete_confirmation.as_deref() != Some(name.as_str()) {
++            self.pending_delete_confirmation = Some(name.clone());
++            self.status_message = Some(StatusMessage::error(format!(
++                "再次点击「确认删除」将永久删除配置「{name}」。"
++            )));
++            ctx.notify();
++            return;
++        }
++        self.busy = true;
++        self.status_message = None;
++        ctx.notify();
++        ctx.spawn(delete_profile(name.clone()), move |me, result, ctx| {
++            me.busy = false;
++            me.pending_delete_confirmation = None;
++            match result {
++                Ok(()) => {
++                    if me.selected_profile.as_deref() == Some(name.as_str()) {
++                        me.selected_profile = None;
++                    }
++                    me.status_message = Some(StatusMessage::info(format!("已删除「{name}」。")));
++                    me.refresh(ctx);
++                }
++                Err(err) => {
++                    me.status_message =
++                        Some(StatusMessage::error(format!("删除「{name}」失败:{err}")));
++                }
++            }
++            ctx.notify();
++        });
++    }
++
++    fn save_to_selected(&mut self, ctx: &mut ViewContext<Self>) {
++        if self.busy {
++            return;
++        }
++        let Some(name) = self.selected_profile.clone() else {
++            // The save button is disabled in this state; guard anyway.
++            self.status_message = Some(StatusMessage::error(
++                "没有选中的配置,请先「另存为新配置…」。",
++            ));
++            ctx.notify();
++            return;
++        };
++        let config = match self.config_from_form(ctx) {
++            Ok(config) => config,
++            Err(message) => {
++                self.status_message = Some(StatusMessage::error(message));
++                ctx.notify();
++                return;
++            }
++        };
++        self.busy = true;
++        self.status_message = None;
++        ctx.notify();
++        let is_active = self.active_profile_name().as_deref() == Some(name.as_str());
++        ctx.spawn(
++            post_profile(name.clone(), config),
++            move |me, result, ctx| {
++                me.busy = false;
++                match result {
++                    Ok(()) => {
++                        let text = if is_active {
++                            format!("已保存到「{name}」。该配置正在生效中,点「启用」让修改生效。")
++                        } else {
++                            format!("已保存到「{name}」。")
++                        };
++                        me.status_message = Some(StatusMessage::info(text));
++                    }
++                    Err(err) => {
++                        me.status_message =
++                            Some(StatusMessage::error(format!("保存到「{name}」失败:{err}")));
++                    }
++                }
++                ctx.notify();
++            },
++        );
++    }
++
++    fn save_as_new_profile(&mut self, name: String, ctx: &mut ViewContext<Self>) {
++        if self.busy {
++            return;
++        }
++        if !is_valid_profile_name(&name) {
++            self.status_message = Some(StatusMessage::error(
++                "配置名称只能包含字母、数字、-、_ 和中文,且不超过 64 个字符。",
++            ));
++            ctx.notify();
++            return;
+         }
++        let config = match self.config_from_form(ctx) {
++            Ok(config) => config,
++            Err(message) => {
++                self.status_message = Some(StatusMessage::error(message));
++                ctx.notify();
++                return;
++            }
++        };
++        self.busy = true;
++        self.status_message = None;
++        ctx.notify();
++        ctx.spawn(
++            post_profile(name.clone(), config),
++            move |me, result, ctx| {
++                me.busy = false;
++                match result {
++                    Ok(()) => {
++                        me.selected_profile = Some(name.clone());
++                        me.save_as_new_expanded = false;
++                        Self::set_input_text(&me.new_profile_input, "", ctx);
++                        me.status_message =
++                            Some(StatusMessage::info(format!("已保存为新配置「{name}」。")));
++                        // The profile list changed; reload it and re-sync the
++                        // dropdown with the new selection.
++                        me.refresh(ctx);
++                    }
++                    Err(err) => {
++                        me.status_message =
++                            Some(StatusMessage::error(format!("另存为「{name}」失败:{err}")));
++                    }
++                }
++                ctx.notify();
++            },
++        );
+     }
+ }
+
+@@ -46,12 +1109,32 @@ impl TypedActionView for LocalAdapterSettingsPageView {
+
+     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+         match action {
+-            LocalAdapterSettingsPageAction::OpenSettingsUI => {
+-                ctx.open_url("http://127.0.0.1:18888/settings");
++            LocalAdapterSettingsPageAction::SelectProfile(name) => {
++                self.select_profile(name.clone(), ctx)
++            }
++            LocalAdapterSettingsPageAction::SetProvider(preset) => self.set_provider(*preset, ctx),
++            LocalAdapterSettingsPageAction::SetHarness(preset) => self.set_harness(*preset, ctx),
++            LocalAdapterSettingsPageAction::ToggleThinkingDisabled => {
++                self.thinking_disabled = !self.thinking_disabled;
++                ctx.notify();
++            }
++            LocalAdapterSettingsPageAction::ActivateSelected => self.activate_selected(ctx),
++            LocalAdapterSettingsPageAction::DeleteSelected => self.delete_selected(ctx),
++            LocalAdapterSettingsPageAction::SaveToSelected => self.save_to_selected(ctx),
++            LocalAdapterSettingsPageAction::ShowSaveAsNew => {
++                self.save_as_new_expanded = true;
++                ctx.notify();
+             }
+-            LocalAdapterSettingsPageAction::OpenStatusJSON => {
+-                ctx.open_url("http://127.0.0.1:18888/settings/status");
++            LocalAdapterSettingsPageAction::ConfirmSaveAsNew => {
++                let name = Self::input_text(&self.new_profile_input, ctx);
++                self.save_as_new_profile(name, ctx);
+             }
++            LocalAdapterSettingsPageAction::CancelSaveAsNew => {
++                self.save_as_new_expanded = false;
++                Self::set_input_text(&self.new_profile_input, "", ctx);
++                ctx.notify();
++            }
++            LocalAdapterSettingsPageAction::Refresh => self.refresh(ctx),
+         }
+     }
+ }
+@@ -94,104 +1177,515 @@ impl From<ViewHandle<LocalAdapterSettingsPageView>> for SettingsPageViewHandle {
+     }
+ }
+
++fn body_text(text: impl Into<String>, appearance: &Appearance) -> Box<dyn Element> {
++    Text::new(text.into(), appearance.ui_font_family(), CONTENT_FONT_SIZE)
++        .soft_wrap(true)
++        .with_color(appearance.theme().nonactive_ui_text_color().into())
++        .finish()
++}
++
++fn error_text(text: impl Into<String>, appearance: &Appearance) -> Box<dyn Element> {
++    Text::new(text.into(), appearance.ui_font_family(), CONTENT_FONT_SIZE)
++        .soft_wrap(true)
++        .with_color(appearance.theme().ui_error_color().into())
++        .finish()
++}
++
++fn render_text_field(
++    label: &str,
++    input: &ViewHandle<SubmittableTextInput>,
++    appearance: &Appearance,
++) -> Box<dyn Element> {
++    Flex::column()
++        .with_cross_axis_alignment(CrossAxisAlignment::Start)
++        .with_child(
++            Text::new(
++                label.to_owned(),
++                appearance.ui_font_family(),
++                CONTENT_FONT_SIZE,
++            )
++            .with_style(Properties::default().weight(Weight::Semibold))
++            .with_color(appearance.theme().active_ui_text_color().into())
++            .finish(),
++        )
++        .with_child(ChildView::new(input).finish())
++        .finish()
++}
++
++/// "当前生效" — what the adapter is actually running right now, plus the
++/// refresh button and the single-line action feedback.
++#[derive(Default)]
++struct LocalAdapterStatusWidget {
++    refresh_button: MouseStateHandle,
++}
++
++impl SettingsWidget for LocalAdapterStatusWidget {
++    type View = LocalAdapterSettingsPageView;
++
++    fn search_terms(&self) -> &str {
++        "local adapter 当前生效 状态 在线 离线 刷新 status connection refresh"
++    }
++
++    fn render(
++        &self,
++        view: &Self::View,
++        appearance: &Appearance,
++        _app: &AppContext,
++    ) -> Box<dyn Element> {
++        let ui_builder = appearance.ui_builder();
++        let mut column = Flex::column().with_spacing(SECTION_SPACING);
++
++        column.add_child(render_sub_header(appearance, "当前生效", None));
++
++        match view.connection {
++            ConnectionState::Loading => {
++                column.add_child(body_text(
++                    format!("正在连接 adapter({ADAPTER_BASE_URL})…"),
++                    appearance,
++                ));
++            }
++            ConnectionState::Offline => {
++                column.add_child(error_text(
++                    format!("当前生效:未知 — 无法读取 adapter 状态或配置({ADAPTER_BASE_URL})"),
++                    appearance,
++                ));
++                column.add_child(body_text(
++                    "请确认 adapter 已启动,然后点击「刷新」。",
++                    appearance,
++                ));
++            }
++            ConnectionState::Online => {
++                let model = view.effective_model.as_deref().unwrap_or("未设置模型");
++                let profile = view
++                    .active_profile_name()
++                    .unwrap_or_else(|| "未保存的配置".to_owned());
++                column.add_child(body_text(
++                    format!("当前生效:{model}({profile}),adapter 在线"),
++                    appearance,
++                ));
++                if let Some(status) = &view.status {
++                    if !status.missing_fields.is_empty() {
++                        column.add_child(error_text(
++                            format!("配置不完整,缺少:{}", status.missing_fields.join(", ")),
++                            appearance,
++                        ));
++                    }
++                    if !status.error.is_empty() {
++                        column.add_child(error_text(
++                            format!("配置警告:{}", status.error),
++                            appearance,
++                        ));
++                    }
++                }
++            }
++        }
++
++        // Single-line feedback for save/activate/delete/refresh results.
++        if let Some(message) = &view.status_message {
++            let element = if message.is_error {
++                error_text(message.text.clone(), appearance)
++            } else {
++                body_text(message.text.clone(), appearance)
++            };
++            column.add_child(element);
++        }
++
++        let mut refresh_button = ui_builder
++            .button(ButtonVariant::Basic, self.refresh_button.clone())
++            .with_text_label("刷新".to_owned())
++            .build();
++        if view.busy {
++            refresh_button = refresh_button.disable();
++        }
++        column.add_child(
++            Flex::row()
++                .with_child(
++                    refresh_button
++                        .on_click(move |ctx, _, _| {
++                            ctx.dispatch_typed_action(LocalAdapterSettingsPageAction::Refresh);
++                        })
++                        .finish(),
++                )
++                .finish(),
++        );
++
++        Container::new(column.finish())
++            .with_margin_bottom(ITEM_VERTICAL_SPACING)
++            .finish()
++    }
++}
++
++/// "选择配置" — pick a saved profile (loads it into the form), then
++/// explicitly activate or delete it.
+ #[derive(Default)]
+-struct LocalAdapterOverviewWidget {
+-    open_settings_button: MouseStateHandle,
+-    open_status_button: MouseStateHandle,
++struct LocalAdapterProfilesWidget {
++    activate_button: MouseStateHandle,
++    delete_button: MouseStateHandle,
+ }
+
+-impl SettingsWidget for LocalAdapterOverviewWidget {
++impl SettingsWidget for LocalAdapterProfilesWidget {
+     type View = LocalAdapterSettingsPageView;
+
+     fn search_terms(&self) -> &str {
+-        "local adapter llm provider settings deepseek openai ollama custom"
++        "local adapter 选择配置 启用 删除 profile activate delete switch"
+     }
+
+     fn render(
+         &self,
+-        _view: &Self::View,
++        view: &Self::View,
+         appearance: &Appearance,
+         _app: &AppContext,
+     ) -> Box<dyn Element> {
+         let ui_builder = appearance.ui_builder();
+-        let primary = ui_builder
+-            .button(ButtonVariant::Accent, self.open_settings_button.clone())
++        let mut column = Flex::column().with_spacing(SECTION_SPACING);
++
++        column.add_child(render_sub_header(appearance, "选择配置", None));
++        column.add_child(body_text(
++            "从下拉框选择一个已保存的配置会把它加载到下方表单;选中不会生效,点「启用」才会切换。",
++            appearance,
++        ));
++
++        column.add_child(render_dropdown_item(
++            appearance,
++            "已保存的配置",
++            None,
++            None,
++            LocalOnlyIconState::Hidden,
++            None,
++            &view.profile_dropdown,
++        ));
++
++        if view.connection == ConnectionState::Online && view.profiles.is_empty() {
++            column.add_child(body_text(
++                "还没有已保存的配置。在下方编辑表单,然后点「另存为新配置…」。",
++                appearance,
++            ));
++        }
++
++        let mut activate_button = ui_builder
++            .button(ButtonVariant::Accent, self.activate_button.clone())
+             .with_style(UiComponentStyles {
+-                font_size: Some(14.),
+                 font_weight: Some(Weight::Semibold),
+                 padding: Some(Coords {
+-                    top: 8.,
+-                    bottom: 8.,
+-                    left: 20.,
+-                    right: 20.,
++                    top: 6.,
++                    bottom: 6.,
++                    left: 16.,
++                    right: 16.,
+                 }),
+                 ..Default::default()
+             })
+-            .with_text_label("Open Local Adapter Settings".to_owned())
+-            .build()
+-            .on_click(move |ctx, _, _| {
+-                ctx.dispatch_typed_action(LocalAdapterSettingsPageAction::OpenSettingsUI);
+-            })
+-            .finish();
++            .with_text_label("启用".to_owned())
++            .build();
++        let delete_label = if view.pending_delete_confirmation.is_some() {
++            "确认删除"
++        } else {
++            "删除"
++        };
++        let mut delete_button = ui_builder
++            .button(ButtonVariant::Error, self.delete_button.clone())
++            .with_text_label(delete_label.to_owned())
++            .build();
++        if view.busy || view.selected_profile.is_none() {
++            activate_button = activate_button.disable();
++            delete_button = delete_button.disable();
++        }
++        column.add_child(
++            Flex::row()
++                .with_spacing(8.)
++                .with_child(
++                    activate_button
++                        .on_click(move |ctx, _, _| {
++                            ctx.dispatch_typed_action(
++                                LocalAdapterSettingsPageAction::ActivateSelected,
++                            );
++                        })
++                        .finish(),
++                )
++                .with_child(
++                    delete_button
++                        .on_click(move |ctx, _, _| {
++                            ctx.dispatch_typed_action(
++                                LocalAdapterSettingsPageAction::DeleteSelected,
++                            );
++                        })
++                        .finish(),
++                )
++                .finish(),
++        );
++
++        Container::new(column.finish())
++            .with_margin_bottom(ITEM_VERTICAL_SPACING)
++            .finish()
++    }
++}
++
++/// "配置内容" — the editable provider configuration form.
++#[derive(Default)]
++struct LocalAdapterConfigWidget {
++    thinking_disabled_switch: SwitchStateHandle,
++}
++
++impl SettingsWidget for LocalAdapterConfigWidget {
++    type View = LocalAdapterSettingsPageView;
++
++    fn search_terms(&self) -> &str {
++        "local adapter llm provider 配置 内容 deepseek openai ollama custom api key base url 模型 max tokens thinking"
++    }
++
++    fn render(
++        &self,
++        view: &Self::View,
++        appearance: &Appearance,
++        _app: &AppContext,
++    ) -> Box<dyn Element> {
++        let ui_builder = appearance.ui_builder();
++        let mut column = Flex::column().with_spacing(SECTION_SPACING);
++
++        column.add_child(render_sub_header(appearance, "配置内容", None));
++
++        column.add_child(render_dropdown_item(
++            appearance,
++            "Provider",
++            Some("选择预设会自动填充 Base URL 和模型,不会覆盖 API Key。"),
++            None,
++            LocalOnlyIconState::Hidden,
++            None,
++            &view.provider_dropdown,
++        ));
++
++        column.add_child(render_text_field(
++            "Base URL",
++            &view.base_url_input,
++            appearance,
++        ));
++        column.add_child(render_text_field(
++            "API Key",
++            &view.api_key_input,
++            appearance,
++        ));
++        column.add_child(render_text_field("模型", &view.model_input, appearance));
++        column.add_child(render_text_field(
++            "Max Tokens",
++            &view.max_tokens_input,
++            appearance,
++        ));
++
++        column.add_child(render_body_item::<LocalAdapterSettingsPageAction>(
++            "禁用 thinking".into(),
++            None,
++            LocalOnlyIconState::Hidden,
++            ToggleState::Enabled,
++            appearance,
++            ui_builder
++                .switch(self.thinking_disabled_switch.clone())
++                .check(view.thinking_disabled)
++                .build()
++                .on_click(move |ctx, _, _| {
++                    ctx.dispatch_typed_action(
++                        LocalAdapterSettingsPageAction::ToggleThinkingDisabled,
++                    );
++                })
++                .finish(),
++            Some("对支持的 provider(如 GLM、DeepSeek)关闭模型的思考/推理阶段,保存后生效。".into()),
++        ));
++
++        Container::new(column.finish())
++            .with_margin_bottom(ITEM_VERTICAL_SPACING)
++            .finish()
++    }
++}
++
++/// Selects the Agent framework that owns the control loop. Known external
++/// runtimes and custom Sidecars share the same OpenWarp runtime protocol.
++struct LocalAdapterHarnessWidget;
++
++impl SettingsWidget for LocalAdapterHarnessWidget {
++    type View = LocalAdapterSettingsPageView;
++
++    fn search_terms(&self) -> &str {
++        "local adapter agent harness native pi deepseek sidecar runtime command"
++    }
++
++    fn render(
++        &self,
++        view: &Self::View,
++        appearance: &Appearance,
++        _app: &AppContext,
++    ) -> Box<dyn Element> {
++        let mut column = Flex::column().with_spacing(SECTION_SPACING);
++
++        column.add_child(render_sub_header(appearance, "Agent Harness", None));
++        column.add_child(render_dropdown_item(
++            appearance,
++            "Harness",
++            Some("选择由哪个框架负责 Agent Loop、重试、压缩和会话状态。"),
++            None,
++            LocalOnlyIconState::Hidden,
++            None,
++            &view.harness_dropdown,
++        ));
++        column.add_child(body_text(view.harness.description(), appearance));
+
+-        let secondary = ui_builder
+-            .button(ButtonVariant::Basic, self.open_status_button.clone())
++        if view.harness != HarnessPreset::Native {
++            column.add_child(render_text_field(
++                "Runtime command",
++                &view.runtime_command_input,
++                appearance,
++            ));
++            column.add_child(body_text(
++                "ProcessDriver 用这个可执行文件启动 Sidecar，App 内置运行时建议填写绝对路径。",
++                appearance,
++            ));
++            column.add_child(render_text_field(
++                "Runtime arguments (JSON)",
++                &view.runtime_args_input,
++                appearance,
++            ));
++            column.add_child(body_text(
++                "JSON 字符串数组，例如 [\"/path/to/dist/main.js\"]。",
++                appearance,
++            ));
++        }
++
++        Container::new(column.finish())
++            .with_margin_bottom(ITEM_VERTICAL_SPACING)
++            .finish()
++    }
++}
++
++/// Bottom actions: save the form into the selected profile, or save it as a
++/// new profile via an inline name row.
++#[derive(Default)]
++struct LocalAdapterSaveWidget {
++    save_button: MouseStateHandle,
++    save_as_button: MouseStateHandle,
++    confirm_save_as_button: MouseStateHandle,
++    cancel_save_as_button: MouseStateHandle,
++}
++
++impl SettingsWidget for LocalAdapterSaveWidget {
++    type View = LocalAdapterSettingsPageView;
++
++    fn search_terms(&self) -> &str {
++        "local adapter 保存 另存为 新配置 save save as new profile"
++    }
++
++    fn render(
++        &self,
++        view: &Self::View,
++        appearance: &Appearance,
++        _app: &AppContext,
++    ) -> Box<dyn Element> {
++        let ui_builder = appearance.ui_builder();
++        let mut column = Flex::column().with_spacing(SECTION_SPACING);
++
++        let mut save_button = ui_builder
++            .button(ButtonVariant::Accent, self.save_button.clone())
+             .with_style(UiComponentStyles {
+-                font_size: Some(14.),
++                font_weight: Some(Weight::Semibold),
+                 padding: Some(Coords {
+-                    top: 8.,
+-                    bottom: 8.,
+-                    left: 20.,
+-                    right: 20.,
++                    top: 6.,
++                    bottom: 6.,
++                    left: 16.,
++                    right: 16.,
+                 }),
+                 ..Default::default()
+             })
+-            .with_text_label("Open Server Status".to_owned())
+-            .build()
+-            .on_click(move |ctx, _, _| {
+-                ctx.dispatch_typed_action(LocalAdapterSettingsPageAction::OpenStatusJSON);
++            .with_text_label(match &view.selected_profile {
++                Some(name) => format!("保存到「{name}」"),
++                None => "保存".to_owned(),
+             })
+-            .finish();
+-
+-        let title = Text::new(
+-            "Local Adapter",
+-            appearance.ui_font_family(),
+-            appearance.ui_font_size() * 1.5,
+-        )
+-        .with_style(Properties::default().weight(Weight::Bold))
+-        .with_color(appearance.theme().active_ui_text_color().into())
+-        .finish();
+-
+-        let description = Text::new(
+-            "WarpLocal uses a bundled local adapter process to route AI requests to your configured LLM provider. Configure the provider in the local settings UI, then retry the AI request manually.",
+-            appearance.ui_font_family(),
+-            14.,
+-        )
+-        .soft_wrap(true)
+-        .with_color(appearance.theme().nonactive_ui_text_color().into())
+-        .finish();
++            .build();
++        let mut save_as_button = ui_builder
++            .button(ButtonVariant::Basic, self.save_as_button.clone())
++            .with_text_label("另存为新配置…".to_owned())
++            .build();
++        if view.busy {
++            save_button = save_button.disable();
++            save_as_button = save_as_button.disable();
++        }
++        if view.selected_profile.is_none() {
++            save_button = save_button.disable();
++        }
+
+-        let details = Text::new(
+-            "The local adapter stores config in ~/Library/Application Support/WarpLocal/config.yaml and exposes /settings/reload and /settings/status endpoints for live reload and diagnostics.",
+-            appearance.ui_font_family(),
+-            13.,
+-        )
+-        .soft_wrap(true)
+-        .with_color(appearance.theme().nonactive_ui_text_color().into())
+-        .finish();
+-
+-        Container::new(
+-            Flex::column()
+-                .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Start)
+-                .with_spacing(16.)
+-                .with_child(title)
+-                .with_child(description)
+-                .with_child(details)
+-                .with_child(primary)
+-                .with_child(secondary)
++        column.add_child(
++            Flex::row()
++                .with_spacing(8.)
++                .with_child(
++                    save_button
++                        .on_click(move |ctx, _, _| {
++                            ctx.dispatch_typed_action(
++                                LocalAdapterSettingsPageAction::SaveToSelected,
++                            );
++                        })
++                        .finish(),
++                )
++                .with_child(
++                    save_as_button
++                        .on_click(move |ctx, _, _| {
++                            ctx.dispatch_typed_action(
++                                LocalAdapterSettingsPageAction::ShowSaveAsNew,
++                            );
++                        })
++                        .finish(),
++                )
+                 .finish(),
+-        )
+-        .with_uniform_padding(PAGE_PADDING)
+-        .finish()
++        );
++
++        if view.selected_profile.is_none() {
++            column.add_child(body_text(
++                "未选择配置 — 无法直接保存,请先「另存为新配置…」。",
++                appearance,
++            ));
++        }
++
++        if view.save_as_new_expanded {
++            let mut confirm_button = ui_builder
++                .button(ButtonVariant::Accent, self.confirm_save_as_button.clone())
++                .with_text_label("确认".to_owned())
++                .build();
++            let cancel_button = ui_builder
++                .button(ButtonVariant::Basic, self.cancel_save_as_button.clone())
++                .with_text_label("取消".to_owned())
++                .build();
++            if view.busy {
++                confirm_button = confirm_button.disable();
++            }
++            column.add_child(
++                Flex::row()
++                    .with_cross_axis_alignment(CrossAxisAlignment::Start)
++                    .with_spacing(8.)
++                    .with_child(
++                        warpui::elements::Shrinkable::new(
++                            1.,
++                            ChildView::new(&view.new_profile_input).finish(),
++                        )
++                        .finish(),
++                    )
++                    .with_child(
++                        confirm_button
++                            .on_click(move |ctx, _, _| {
++                                ctx.dispatch_typed_action(
++                                    LocalAdapterSettingsPageAction::ConfirmSaveAsNew,
++                                );
++                            })
++                            .finish(),
++                    )
++                    .with_child(
++                        cancel_button
++                            .on_click(move |ctx, _, _| {
++                                ctx.dispatch_typed_action(
++                                    LocalAdapterSettingsPageAction::CancelSaveAsNew,
++                                );
++                            })
++                            .finish(),
++                    )
++                    .finish(),
++            );
++        }
++
++        Container::new(column.finish())
++            .with_margin_bottom(ITEM_VERTICAL_SPACING)
++            .finish()
+     }
+ }

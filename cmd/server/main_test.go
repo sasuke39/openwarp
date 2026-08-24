@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,122 +42,6 @@ func (w *finishOrderingWriter) Write(p []byte) (int, error) {
 }
 
 func (*finishOrderingWriter) Flush() {}
-
-func TestParseRuntimeArgsPreservesOneArgumentPerLine(t *testing.T) {
-	got := parseRuntimeArgs("  /path with spaces/main.js  \r\n--flag\n\n value with spaces \n")
-	want := []string{"/path with spaces/main.js", "--flag", "value with spaces"}
-	if len(got) != len(want) {
-		t.Fatalf("args = %#v, want %#v", got, want)
-	}
-	for index := range want {
-		if got[index] != want[index] {
-			t.Fatalf("arg %d = %q, want %q", index, got[index], want[index])
-		}
-	}
-}
-
-func TestSettingsFormPersistsAgentHarness(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	server := &Server{
-		cfg:           config.ApplyDefaults(&config.Config{}),
-		configPath:    configPath,
-		conversations: make(map[string]*Conversation),
-	}
-	form := url.Values{
-		"provider":              {"DeepSeek"},
-		"base_url":              {"https://api.deepseek.com"},
-		"api_key":               {"test-key"},
-		"model":                 {"deepseek-chat"},
-		"host":                  {"127.0.0.1"},
-		"port":                  {"18888"},
-		"agent_runtime_driver":  {"pi-agent"},
-		"agent_runtime_command": {"/opt/node/bin/node"},
-		"agent_runtime_args":    {"/opt/open warp/pi/dist/main.js\n--trace-runtime"},
-	}
-	req := httptest.NewRequest(http.MethodPost, "/settings", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	recorder := httptest.NewRecorder()
-
-	server.handleSettings(recorder, req)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("settings status = %d, body=%s", recorder.Code, recorder.Body.String())
-	}
-	loaded, err := config.Load(configPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.AgentRuntime.Driver != "pi-agent" || loaded.AgentRuntime.Command != "/opt/node/bin/node" {
-		t.Fatalf("runtime = %#v", loaded.AgentRuntime)
-	}
-	wantArgs := []string{"/opt/open warp/pi/dist/main.js", "--trace-runtime"}
-	if len(loaded.AgentRuntime.Args) != len(wantArgs) {
-		t.Fatalf("runtime args = %#v", loaded.AgentRuntime.Args)
-	}
-	for index := range wantArgs {
-		if loaded.AgentRuntime.Args[index] != wantArgs[index] {
-			t.Fatalf("runtime arg %d = %q, want %q", index, loaded.AgentRuntime.Args[index], wantArgs[index])
-		}
-	}
-}
-
-func TestLegacySettingsFormPreservesAgentHarness(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	server := &Server{
-		cfg: config.ApplyDefaults(&config.Config{AgentRuntime: config.RuntimeConfig{
-			Driver: "deepseek-harness", Command: "node", Args: []string{"/opt/dsh/main.js"},
-		}}),
-		configPath:    configPath,
-		conversations: make(map[string]*Conversation),
-	}
-	form := url.Values{
-		"provider": {"DeepSeek"}, "base_url": {"https://api.deepseek.com"}, "api_key": {"test-key"},
-		"model": {"deepseek-chat"}, "host": {"127.0.0.1"}, "port": {"18888"},
-	}
-	req := httptest.NewRequest(http.MethodPost, "/settings", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	recorder := httptest.NewRecorder()
-	server.handleSettings(recorder, req)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("settings status = %d, body=%s", recorder.Code, recorder.Body.String())
-	}
-	loaded, err := config.Load(configPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.AgentRuntime.Driver != "deepseek-harness" || len(loaded.AgentRuntime.Args) != 1 || loaded.AgentRuntime.Args[0] != "/opt/dsh/main.js" {
-		t.Fatalf("legacy form replaced runtime: %#v", loaded.AgentRuntime)
-	}
-}
-
-func TestSettingsPageRendersAgentHarnessTab(t *testing.T) {
-	server := &Server{
-		cfg: config.ApplyDefaults(&config.Config{
-			AgentRuntime: config.RuntimeConfig{
-				Driver:  "deepseek-harness",
-				Command: "node",
-				Args:    []string{"/opt/dsh/dist/main.js"},
-			},
-		}),
-		configPath: "/tmp/open-warp-config.yaml",
-	}
-	recorder := httptest.NewRecorder()
-	server.renderSettingsHTML(recorder)
-	body := recorder.Body.String()
-	if strings.Contains(body, "%!") {
-		t.Fatalf("settings page contains an unresolved format placeholder")
-	}
-	for _, expected := range []string{
-		`role="tab"`,
-		`Agent Harness`,
-		`selected value="deepseek-harness"`,
-		`name="agent_runtime_command"`,
-		`/opt/dsh/dist/main.js`,
-	} {
-		if !strings.Contains(body, expected) {
-			t.Fatalf("settings page does not contain %q", expected)
-		}
-	}
-}
 
 func TestFinishEventRunsDurableEnqueueFirst(t *testing.T) {
 	committed := false

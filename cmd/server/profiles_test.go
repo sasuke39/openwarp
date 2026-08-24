@@ -13,6 +13,16 @@ import (
 	"github.com/sasuke39/open-warp/internal/config"
 )
 
+func TestConfigToJSONEncodesEmptyRuntimeArgsAsArray(t *testing.T) {
+	payload, err := json.Marshal(configToJSON(&config.Config{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(payload, []byte(`"args":[]`)) {
+		t.Fatalf("runtime args must be a JSON array, got %s", payload)
+	}
+}
+
 func newProfileTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -57,7 +67,12 @@ const glmProfileJSON = `{
   "api_key": "glm-secret-key",
   "model": "glm-4.6",
   "max_tokens": 8192,
-  "thinking_disabled": true
+  "thinking_disabled": true,
+  "agent_runtime": {
+    "driver": "deepseek-harness",
+    "command": "/bundle/Contents/Helpers/node-dsh",
+    "args": ["/bundle/Contents/Resources/dsh-runtime/dist/main.js"]
+  }
 }`
 
 func TestProfilesCRUD(t *testing.T) {
@@ -109,6 +124,12 @@ func TestProfilesCRUD(t *testing.T) {
 	if !loaded.ThinkingDisabled || loaded.MaxTokens != 8192 {
 		t.Fatalf("expected thinking_disabled/max_tokens to round-trip: %+v", loaded)
 	}
+	if loaded.AgentRuntime.Driver != "deepseek-harness" ||
+		loaded.AgentRuntime.Command != "/bundle/Contents/Helpers/node-dsh" ||
+		len(loaded.AgentRuntime.Args) != 1 ||
+		loaded.AgentRuntime.Args[0] != "/bundle/Contents/Resources/dsh-runtime/dist/main.js" {
+		t.Fatalf("expected agent_runtime to round-trip: %+v", loaded.AgentRuntime)
+	}
 
 	// Get one profile as JSON.
 	rec = profileRequest(t, s, http.MethodGet, "/settings/profiles/glm", "glm", "")
@@ -122,6 +143,9 @@ func TestProfilesCRUD(t *testing.T) {
 	if got.Provider != "glm" || got.BaseURL != "https://open.bigmodel.cn/api/paas/v4" ||
 		got.APIKey != "glm-secret-key" || got.Model != "glm-4.5-air" {
 		t.Fatalf("unexpected profile JSON: %+v", got)
+	}
+	if got.AgentRuntime.Driver != "deepseek-harness" || len(got.AgentRuntime.Args) != 1 {
+		t.Fatalf("unexpected runtime profile JSON: %+v", got.AgentRuntime)
 	}
 
 	// List: two profiles, none active, sorted by name.
@@ -194,6 +218,9 @@ func TestProfileActivate(t *testing.T) {
 	if activeCfg.Provider != "glm" || activeCfg.APIKey != "glm-secret-key" ||
 		activeCfg.Model != "glm-4.6" || activeCfg.BaseURL != "https://open.bigmodel.cn/api/paas/v4" {
 		t.Fatalf("config.yaml does not match activated profile: %+v", activeCfg)
+	}
+	if activeCfg.AgentRuntime.Driver != "deepseek-harness" || len(activeCfg.AgentRuntime.Args) != 1 {
+		t.Fatalf("config.yaml lost agent runtime: %+v", activeCfg.AgentRuntime)
 	}
 
 	// Active marker recorded.

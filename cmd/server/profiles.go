@@ -34,14 +34,21 @@ func validProfileName(name string) bool {
 // JSON tags; using a DTO here keeps POST /settings decoding behavior
 // untouched.
 type configJSON struct {
-	Provider         string           `json:"provider"`
-	BaseURL          string           `json:"base_url"`
-	APIKey           string           `json:"api_key"`
-	Model            string           `json:"model"`
-	MaxTokens        int              `json:"max_tokens"`
-	ThinkingDisabled bool             `json:"thinking_disabled"`
-	Server           serverConfigJSON `json:"server"`
-	Memory           memoryConfigJSON `json:"memory"`
+	Provider         string            `json:"provider"`
+	BaseURL          string            `json:"base_url"`
+	APIKey           string            `json:"api_key"`
+	Model            string            `json:"model"`
+	MaxTokens        int               `json:"max_tokens"`
+	ThinkingDisabled bool              `json:"thinking_disabled"`
+	AgentRuntime     runtimeConfigJSON `json:"agent_runtime"`
+	Server           serverConfigJSON  `json:"server"`
+	Memory           memoryConfigJSON  `json:"memory"`
+}
+
+type runtimeConfigJSON struct {
+	Driver  string   `json:"driver"`
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
 }
 
 type serverConfigJSON struct {
@@ -67,6 +74,11 @@ func configToJSON(cfg *config.Config) configJSON {
 		Model:            cfg.Model,
 		MaxTokens:        cfg.MaxTokens,
 		ThinkingDisabled: cfg.ThinkingDisabled,
+		AgentRuntime: runtimeConfigJSON{
+			Driver:  cfg.AgentRuntime.Driver,
+			Command: cfg.AgentRuntime.Command,
+			Args:    append([]string{}, cfg.AgentRuntime.Args...),
+		},
 		Server: serverConfigJSON{
 			Host: cfg.Server.Host,
 			Port: cfg.Server.Port,
@@ -91,6 +103,11 @@ func (c *configJSON) toConfig() *config.Config {
 		Model:            c.Model,
 		MaxTokens:        c.MaxTokens,
 		ThinkingDisabled: c.ThinkingDisabled,
+		AgentRuntime: config.RuntimeConfig{
+			Driver:  c.AgentRuntime.Driver,
+			Command: c.AgentRuntime.Command,
+			Args:    append([]string(nil), c.AgentRuntime.Args...),
+		},
 		Server: config.ServerConfig{
 			Host: c.Server.Host,
 			Port: c.Server.Port,

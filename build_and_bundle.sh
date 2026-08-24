@@ -41,7 +41,20 @@ fi
 
 echo "Using WARP_SRC=$WARP_SRC"
 
-echo "=== Step 1/5: Building warp-local-adapter (Go server) ==="
+NODE_BIN="$(command -v node || true)"
+if [[ -z "$NODE_BIN" ]]; then
+  echo "Node.js is required to bundle the Pi and DeepSeek Harness runtimes."
+  exit 1
+fi
+
+echo "=== Step 1/6: Building Agent runtime Sidecars ==="
+for runtime_dir in "$SCRIPT_DIR/integrations/pi-agent" "$SCRIPT_DIR/integrations/deepseek-harness"; do
+  echo "  -> $(basename "$runtime_dir")"
+  (cd "$runtime_dir" && npm ci --silent && npm run build --silent)
+done
+
+echo ""
+echo "=== Step 2/6: Building warp-local-adapter (Go server) ==="
 cd "$SCRIPT_DIR"
 mkdir -p "$SCRIPT_DIR/bin" "$GO_CACHE_DIR" "$GO_TMP_DIR"
 GOCACHE="$GO_CACHE_DIR" GOTMPDIR="$GO_TMP_DIR" GOFLAGS="-buildvcs=false" \
@@ -49,17 +62,18 @@ GOCACHE="$GO_CACHE_DIR" GOTMPDIR="$GO_TMP_DIR" GOFLAGS="-buildvcs=false" \
 echo "  -> bin/warp-local-adapter"
 
 echo ""
-echo "=== Step 2/5: Building warp (WarpLocal client binary) ==="
+echo "=== Step 3/6: Building warp (WarpLocal client binary) ==="
 cd "$WARP_SRC"
 cargo build --bin warp -F skip_firebase_anonymous_user
 echo "  -> target/debug/warp"
 
 echo ""
-echo "=== Step 3/5: Creating app bundle ==="
+echo "=== Step 4/6: Creating app bundle ==="
 mkdir -p "$BUNDLE_DIR/Contents/MacOS"
 mkdir -p "$BUNDLE_DIR/Contents/Helpers"
 mkdir -p "$BUNDLE_DIR/Contents/Resources"
-rm -f "$BUNDLE_DIR/Contents/MacOS/warplocal" "$BUNDLE_DIR/Contents/Helpers/warp-core"
+rm -f "$BUNDLE_DIR/Contents/MacOS/warplocal" "$BUNDLE_DIR/Contents/Helpers/warp-core" "$BUNDLE_DIR/Contents/Helpers/node-dsh" "$BUNDLE_DIR/Contents/Helpers/node-runtime"
+rm -rf "$BUNDLE_DIR/Contents/Resources/pi-runtime" "$BUNDLE_DIR/Contents/Resources/dsh-runtime"
 
 # Copy binaries
 cp "$WARP_SRC/target/debug/warp" "$BUNDLE_DIR/Contents/MacOS/warp"
@@ -67,6 +81,25 @@ chmod +x "$BUNDLE_DIR/Contents/MacOS/warp"
 
 cp "$SCRIPT_DIR/bin/warp-local-adapter" "$BUNDLE_DIR/Contents/Helpers/warp-local-adapter"
 chmod +x "$BUNDLE_DIR/Contents/Helpers/warp-local-adapter"
+
+cp "$NODE_BIN" "$BUNDLE_DIR/Contents/Helpers/node-runtime"
+chmod +x "$BUNDLE_DIR/Contents/Helpers/node-runtime"
+
+for runtime_name in pi-agent deepseek-harness; do
+  source_dir="$SCRIPT_DIR/integrations/$runtime_name"
+  if [[ "$runtime_name" == "pi-agent" ]]; then
+    resource_name="pi-runtime"
+  else
+    resource_name="dsh-runtime"
+  fi
+  runtime_dest="$BUNDLE_DIR/Contents/Resources/$resource_name"
+  mkdir -p "$runtime_dest"
+  cp -R "$source_dir/dist" "$source_dir/node_modules" "$runtime_dest/"
+  cp "$source_dir/package.json" "$source_dir/package-lock.json" "$runtime_dest/"
+  if [[ -f "$source_dir/cordis.yml" ]]; then
+    cp "$source_dir/cordis.yml" "$runtime_dest/cordis.yml"
+  fi
+done
 
 # Copy example config
 cp "$SCRIPT_DIR/config.example.yaml" "$BUNDLE_DIR/Contents/Resources/config.example.yaml"
@@ -131,7 +164,7 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" << 'PLIST'
 PLIST
 
 echo ""
-echo "=== Step 4/5: Signing app bundle ==="
+echo "=== Step 5/6: Signing app bundle ==="
 SIGNING_IDENTITY="${WARPLOCAL_SIGNING_IDENTITY:-}"
 if [[ -z "$SIGNING_IDENTITY" ]]; then
   SIGNING_IDENTITY="$(
@@ -150,7 +183,7 @@ fi
 codesign --verify --deep --strict "$BUNDLE_DIR"
 
 echo ""
-echo "=== Step 5/5: Registering URL scheme ==="
+echo "=== Step 6/6: Registering URL scheme ==="
 LSREGISTER=$(find /System/Library/Frameworks/CoreServices.framework -name lsregister 2>/dev/null | head -1)
 "$LSREGISTER" -f "$BUNDLE_DIR" 2>/dev/null || true
 
@@ -162,6 +195,9 @@ echo ""
 echo "Contents:"
 echo "  MacOS/warp               (WarpLocal main application)"
 echo "  Helpers/warp-local-adapter (AI backend)"
+echo "  Helpers/node-runtime       (Sidecar runtime)"
+echo "  Resources/pi-runtime       (Pi Agent Sidecar)"
+echo "  Resources/dsh-runtime      (DeepSeek Harness Sidecar)"
 echo "  Resources/config.example.yaml"
 echo ""
 echo "To launch, run:"

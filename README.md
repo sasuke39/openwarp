@@ -71,7 +71,7 @@ See **[Troubleshooting](./docs/guide/troubleshooting.md)** for more help.
 ## How to Use
 
 1. Download and open `WarpLocal.app`.
-2. In the app menu, choose `Local Adapter Settings...`.
+2. Open Warp's native **Settings → Local Adapter** page.
 3. Select your provider and fill in the base URL, API key, and model name.
 4. Save the settings. The local adapter reloads automatically.
 5. Go back to WarpLocal, press `Cmd+K`, and ask the terminal to help.
@@ -101,7 +101,7 @@ server:
   port: 18888
 ```
 
-For normal use, configure everything from `Local Adapter Settings...`. The YAML file is mainly useful for debugging or automation.
+For normal use, configure everything from Warp's native **Settings → Local Adapter** page. The YAML file is mainly useful for debugging or automation. The adapter no longer serves a browser-based settings page.
 
 ## Repository Layout
 
@@ -129,9 +129,10 @@ The `patches/` directory contains the Warp client patches:
 | 0002 | `Channel::Local` entrypoint — activates local adapter config |
 | 0003 | Skip Firebase auth — local adapter doesn't need cloud auth |
 | 0004 | CJK natural language detection — Chinese/Japanese/Korean input recognized as AI queries |
-| 0005 | "Local Adapter Settings..." menu item in Warp UI |
+| 0005 | Native **Settings → Local Adapter** menu entry in Warp UI |
 | 0006 | Skip onboarding for local adapter builds |
 | 0007 | Gracefully stop the adapter helper when WarpLocal exits |
+| 0012 | Replace the legacy browser page with native provider and Agent Harness settings |
 
 See **[WARP_CLIENT.md](./WARP_CLIENT.md)** for details on each patch.
 
@@ -142,8 +143,11 @@ WarpLocal.app/
 └── Contents/
     ├── MacOS/warp                # WarpLocal main binary
     ├── Helpers/warp-local-adapter # Go AI backend server
+    ├── Helpers/node-runtime       # Runtime for bundled external harnesses
     └── Resources/
         ├── config.example.yaml
+        ├── pi-runtime/
+        ├── dsh-runtime/
         └── iconfile.icns
 ```
 
@@ -158,11 +162,10 @@ gofmt -w ./cmd ./internal
 
 ## Roadmap
 
-1. Native Warp settings page for Local Adapter (instead of web UI)
-2. `ask_user_question` tool support
-3. Better `apply_file_diffs` failure reporting
-4. Improved long-running shell command behavior
-5. CI-based release automation
+1. `ask_user_question` tool support
+2. Better `apply_file_diffs` failure reporting
+3. Improved long-running shell command behavior
+4. CI-based release automation
 
 ## Star History
 
