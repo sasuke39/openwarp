@@ -20,11 +20,7 @@ curl http://127.0.0.1:18888/health
 
 ## AI 请求出现服务商错误
 
-打开：
-
-```text
-http://127.0.0.1:18888/settings
-```
+打开 WarpLocal 原生的 **设置 → Local Adapter** 页面。
 
 确认：
 

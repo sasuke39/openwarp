@@ -21,6 +21,7 @@ GitHub 仓库只包含 **本地适配器与补丁**（`local-adapter`）。要�
 | 0005 | `app/src/app_menus.rs` 等 | 暴露 Local Adapter 设置菜单入口 |
 | 0006 | `app/src/auth/auth_state.rs` | 本地构建跳过首次引导流程 |
 | 0007 | `app/src/bin/local.rs` | 退出应用时优雅停止本地适配器辅助进程 |
+| 0012 | `app/src/settings_view/local_adapter_page.rs` | 原生 Provider 与 Agent Harness 配置页 |
 
 ## 打补丁 + 编译
 
@@ -64,9 +65,9 @@ Warp 的输入分类器（`input_classifier` crate）用英文词表判断输入
 
 这个补丁在 `natural_language_words_score()` 中增加非拉丁文字检测：CJK（中日韩）、西里尔、阿拉伯文等字符直接识别为自然语言 token。
 
-### 0005 — Local Adapter 设置菜单入口
+### 0005 — 原生 Local Adapter 设置入口
 
-在 WarpLocal 的 AI 菜单中添加 `Local Adapter Settings...` 菜单项（仅 `Channel::Local` 时可见），点击后打开本地设置页 `http://127.0.0.1:18888/settings`，方便修改服务商、模型和接口密钥。
+在 WarpLocal 的 AI 菜单中添加 `Local Adapter Settings...` 菜单项（仅 `Channel::Local` 时可见），点击后进入 Warp 原生 **Settings → Local Adapter** 页面。服务商、模型、接口密钥和 Agent Harness 均在原生页面保存；Go adapter 只提供 `/settings/config`、`/settings/profiles/*`、`/settings/status` 等 JSON 接口，不再提供网页设置页。
 
 ### 0006 — 跳过首次引导流程
 
@@ -75,6 +76,10 @@ Warp 的输入分类器（`input_classifier` crate）用英文词表判断输入
 ### 0007 — 优雅停止本地适配器
 
 WarpLocal 退出时先向本地适配器辅助进程发送终止信号，让 Go 服务有机会保存会话状态；如果等待超时，再强制结束进程。
+
+### 0012 — 原生 Local Adapter 配置页
+
+用原生 Warp Settings 控件直接维护 Provider、模型、API Key、Pi Agent、DeepSeek Harness 和自定义 Sidecar。页面通过 adapter 的 JSON 接口读写配置；不再跳转到浏览器页面。
 
 ## 一键打包
 
