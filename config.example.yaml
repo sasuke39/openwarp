@@ -2,6 +2,12 @@ provider: openai-compatible
 base_url: https://api.openai.com/v1
 api_key: YOUR_API_KEY
 model: gpt-4.1-mini
+# Select one control loop. External runtimes speak the same versioned protocol.
+# agent_runtime:
+#   driver: pi-agent
+#   command: node
+#   args:
+#     - /absolute/path/to/integrations/pi-agent/dist/main.js
 server:
   host: 127.0.0.1
   port: 18888

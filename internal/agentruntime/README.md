@@ -1,8 +1,8 @@
 # External Agent Runtime Protocol
 
 `Driver` isolates Warp transport from an agent framework. The built-in process
-driver launches any sidecar that speaks versioned NDJSON on stdin/stdout. DSH is
-the first implementation; later runtimes use the same contract.
+driver launches any sidecar that speaks versioned NDJSON on stdin/stdout. DSH
+and Pi use the same contract without importing each other's packages.
 
 Every frame has `version`, `exchange_id`, `type`, and `payload`. Warp sends:
 
