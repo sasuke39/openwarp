@@ -673,6 +673,17 @@ func extractInputs(req *pb.Request) []input {
 					Kind:    "user_query",
 					Content: ui.UserQuery.GetQuery(),
 				})
+			case *pb.Request_Input_UserInputs_UserInput_CliAgentUserQuery:
+				// Warp uses CLIAgentUserQuery when Agent mode is opened from a
+				// terminal that already has a foreground command, including a
+				// managed SSH session. The nested UserQuery is still the user's
+				// actual prompt and must enter the same agent loop as UserQuery.
+				if userQuery := ui.CliAgentUserQuery.GetUserQuery(); userQuery != nil {
+					inputs = append(inputs, input{
+						Kind:    "user_query",
+						Content: userQuery.GetQuery(),
+					})
+				}
 			case *pb.Request_Input_UserInputs_UserInput_ToolCallResult:
 				inputs = append(inputs, extractToolResult(ui.ToolCallResult))
 			}
