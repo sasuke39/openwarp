@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -60,6 +61,7 @@ type Server struct {
 	runtimeMu        sync.RWMutex
 	conversations    map[string]*Conversation
 	runningTasks     sync.Map // taskID → context.CancelFunc
+	externalTasks    sync.Map // taskID → agentruntime.Driver while a framework turn is active
 	runtimeDriver    agentruntime.Driver
 	cfg              *config.Config
 	configPath       string
@@ -231,6 +233,26 @@ func main() {
 	log.Printf("[SERVER] Starting warp-local-adapter, config=%s", resolvedConfigPath)
 
 	cfg, err := config.LoadOrDefault(resolvedConfigPath)
+	cfg = config.ApplyDefaults(cfg)
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	listener, listenErr := net.Listen("tcp", addr)
+	if listenErr != nil {
+		// Two Warp windows can start at nearly the same time. Reserve the port before initializing
+		// models, memory, and conversations so the losing helper exits quietly and the already
+		// healthy adapter remains authoritative.
+		client := http.Client{Timeout: 750 * time.Millisecond}
+		if response, healthErr := client.Get("http://" + addr + "/health"); healthErr == nil {
+			var health settingsStatus
+			decodeErr := json.NewDecoder(response.Body).Decode(&health)
+			_ = response.Body.Close()
+			if decodeErr == nil && health.Name == "warp-local-adapter" {
+				log.Printf("[SERVER] Reusing warp-local-adapter already listening on %s", addr)
+				return
+			}
+		}
+		log.Fatalf("Server error: listen tcp %s: %v", addr, listenErr)
+	}
+	defer listener.Close()
 	server := NewServer(cfg, resolvedConfigPath)
 	if err != nil {
 		server.lastConfigError = err.Error()
@@ -252,7 +274,6 @@ func main() {
 	mux.HandleFunc("POST /settings/memory/clear-session", server.handleMemoryClearSession)
 	mux.HandleFunc("POST /settings/memory/clear-project", server.handleMemoryClearProject)
 
-	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	httpServer := &http.Server{
 		Addr:    addr,
 		Handler: mux,
@@ -269,7 +290,7 @@ func main() {
 	}()
 
 	log.Printf("Local adapter listening on %s", addr)
-	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
+	if err := httpServer.Serve(listener); err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
 	}
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -454,7 +475,19 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 			fn()
 		}
 	}
-	w.WriteHeader(http.StatusOK)
+	if value, ok := s.externalTasks.LoadAndDelete(taskID); ok {
+		if driver, ok := value.(agentruntime.Driver); ok {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			if err := driver.Cancel(ctx, taskID); err != nil {
+				log.Printf("[RUNTIME:%s] cancel task %s: %v", driver.Name(), taskID, err)
+				http.Error(w, "failed to cancel external agent task", http.StatusBadGateway)
+				return
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode("ok")
 }
 
 func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
@@ -579,12 +612,29 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 	s.runtimeMu.RLock()
 	runtimeDriver := s.runtimeDriver
 	if runtimeDriver != nil {
+		// A framework turn spans multiple HTTP exchanges while Warp executes tools.
+		// If a new user message arrives before the previous turn was resumed (for
+		// example after the user rejected a tool), terminate that stale turn first.
+		if !isFollowUp {
+			if value, ok := s.externalTasks.LoadAndDelete(taskID); ok {
+				if activeDriver, ok := value.(agentruntime.Driver); ok {
+					if err := activeDriver.Cancel(context.Background(), taskID); err != nil {
+						log.Printf("[RUNTIME:%s] cancel stale task %s before new input: %v", activeDriver.Name(), taskID, err)
+					}
+				}
+			}
+		}
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 		s.runningTasks.Store(taskID, cancel)
 		defer s.runningTasks.Delete(taskID)
 
-		s.runExternalAgent(ctx, runtimeDriver, w, flusher, conv, convID, requestID, taskID, isFollowUp || taskIDFromClient, inputs, req.GetInput().GetContext())
+		_, awaitingTool := s.runExternalAgent(ctx, runtimeDriver, w, flusher, conv, convID, requestID, taskID, isFollowUp || taskIDFromClient, inputs, req.GetInput().GetContext())
+		if awaitingTool {
+			s.externalTasks.Store(taskID, runtimeDriver)
+		} else {
+			s.externalTasks.Delete(taskID)
+		}
 		s.runtimeMu.RUnlock()
 		conv.mu.Unlock()
 		s.requestConversationSave()

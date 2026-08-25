@@ -36,3 +36,9 @@ curl http://127.0.0.1:18888/health
 ## 打开 WarpLocal 后官方 Warp 退出
 
 请使用最新发布包。`WarpLocal.app` 设计上可以和官方 Warp 并存。
+
+## SSH 页签进入 Agent 后仍在本机执行
+
+不要只根据 Agent 输入框判断是否进入远端模式。执行 `hostname; whoami; pwd`，结果必须
+属于远端且不能出现 `/Users/...`。实现约束和发布回归步骤见
+[托管 SSH Agent：架构约束与回归清单](./managed-ssh-agent.md)。

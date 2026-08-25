@@ -25,7 +25,7 @@ func (s *Server) runExternalAgent(
 	taskAlreadyExists bool,
 	inputs []input,
 	executionContext *pb.InputContext,
-) bool {
+) (ok bool, awaitingTool bool) {
 	// Keep the external-runtime event sequence identical to the native agent
 	// loop. When Warp did not provide a task in TaskContext, the generated task
 	// ID is unknown to the client until CreateTask arrives. Sending output first
@@ -65,6 +65,7 @@ func (s *Server) runExternalAgent(
 
 	outputMessageID := uuid.NewString()
 	sawText := false
+	sawAwaitingTool := false
 	var pending []llm.ToolCall
 	emit := func(event agentruntime.Event) error {
 		switch event.Type {
@@ -93,6 +94,7 @@ func (s *Server) runExternalAgent(
 				s.sendTodoListUpdate(w, flusher, taskID, previous, next)
 			}
 		case agentruntime.EventTurnAwaiting:
+			sawAwaitingTool = true
 			if len(pending) == 0 {
 				return fmt.Errorf("%s runtime suspended without a tool call", driver.Name())
 			}
@@ -112,10 +114,10 @@ func (s *Server) runExternalAgent(
 		} else {
 			s.sendFinishError(w, flusher, err.Error())
 		}
-		return false
+		return false, false
 	}
 	s.sendEvent(w, flusher, finishEvent(&pb.ResponseEvent_StreamFinished_Done{}))
-	return true
+	return true, sawAwaitingTool
 }
 
 func translateExternalToolCall(call agentruntime.ToolCall) (llm.ToolCall, error) {
