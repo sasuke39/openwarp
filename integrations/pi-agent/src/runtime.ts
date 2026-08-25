@@ -68,7 +68,10 @@ export class PiAgentRuntime {
       state = await this.createState(exchangeId, request)
       this.sessions.set(request.conversation_id, state)
     }
-    if (state.active) throw new Error(`conversation ${request.conversation_id} already has a running turn`)
+    // Warp may submit a fresh user message after rejecting a pending tool. A
+    // rejected tool does not always produce a resume exchange, so make a new
+    // turn authoritative and release the stale Pi prompt before starting it.
+    if (state.active) await this.cancelState(state, 'Pi turn superseded by new user input')
     state.exchangeId = exchangeId
     state.taskId = request.task_id
     state.workingDir = request.working_dir || state.workingDir
@@ -97,12 +100,14 @@ export class PiAgentRuntime {
 
   private async cancelTask(taskId: string): Promise<void> {
     const matching = [...this.sessions.values()].filter(state => state.taskId === taskId && state.active)
-    await Promise.all(matching.map(async state => {
-      state.active = false
-      state.runToken++
-      this.broker.cancel(state, 'Pi task was cancelled')
-      await state.session.abort()
-    }))
+    await Promise.all(matching.map(state => this.cancelState(state, 'Pi task was cancelled')))
+  }
+
+  private async cancelState(state: SessionState, reason: string): Promise<void> {
+    state.active = false
+    state.runToken++
+    this.broker.cancel(state, reason)
+    await state.session.abort()
   }
 
   private async createState(exchangeId: string, request: TurnRequest): Promise<SessionState> {

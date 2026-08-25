@@ -89,11 +89,11 @@ func TestRunExternalAgentCreatesTaskBeforeFirstMessage(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	server := &Server{}
 
-	if ok := server.runExternalAgent(
+	if ok, awaiting := server.runExternalAgent(
 		context.Background(), externalRuntimeTestDriver{}, recorder, recorder,
 		&Conversation{}, "conversation-1", "request-1", "task-1", false,
 		[]input{{Kind: "user_query", Content: "hello"}}, nil,
-	); !ok {
+	); !ok || awaiting {
 		t.Fatal("expected external runtime turn to finish successfully")
 	}
 
@@ -114,11 +114,11 @@ func TestRunExternalAgentDoesNotRecreateExistingTask(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	server := &Server{}
 
-	if ok := server.runExternalAgent(
+	if ok, awaiting := server.runExternalAgent(
 		context.Background(), externalRuntimeTestDriver{}, recorder, recorder,
 		&Conversation{}, "conversation-1", "request-1", "task-1", true,
 		[]input{{Kind: "tool_result", ToolCallID: "call-1", Content: "ok"}}, nil,
-	); !ok {
+	); !ok || awaiting {
 		t.Fatal("expected external runtime continuation to finish successfully")
 	}
 
@@ -179,3 +179,43 @@ func TestHandleAgentRequestCreatesMissingTaskBeforeExternalOutput(t *testing.T) 
 }
 
 var _ agentruntime.Driver = externalRuntimeTestDriver{}
+
+type cancelRecordingDriver struct {
+	cancelled chan string
+}
+
+func (driver *cancelRecordingDriver) Name() string { return "cancel-recording-runtime" }
+func (driver *cancelRecordingDriver) Exchange(context.Context, agentruntime.TurnRequest, func(agentruntime.Event) error) error {
+	return nil
+}
+func (driver *cancelRecordingDriver) Cancel(_ context.Context, taskID string) error {
+	driver.cancelled <- taskID
+	return nil
+}
+func (driver *cancelRecordingDriver) Close(context.Context) error { return nil }
+
+func TestHandleCancelTaskCancelsSuspendedExternalTurn(t *testing.T) {
+	driver := &cancelRecordingDriver{cancelled: make(chan string, 1)}
+	server := &Server{}
+	server.externalTasks.Store("task-suspended", agentruntime.Driver(driver))
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/agent/tasks/task-suspended/cancel", nil)
+	request.SetPathValue("task_id", "task-suspended")
+	server.handleCancelTask(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d, want 200", recorder.Code)
+	}
+	select {
+	case taskID := <-driver.cancelled:
+		if taskID != "task-suspended" {
+			t.Fatalf("cancelled task = %q", taskID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("external runtime was not cancelled")
+	}
+	if _, ok := server.externalTasks.Load("task-suspended"); ok {
+		t.Fatal("cancelled external task must be removed")
+	}
+}

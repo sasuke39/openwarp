@@ -43,6 +43,52 @@ func (w *finishOrderingWriter) Write(p []byte) (int, error) {
 
 func (*finishOrderingWriter) Flush() {}
 
+func TestExtractInputsAcceptsCLIAgentUserQueryFromSSHSession(t *testing.T) {
+	req := &pb.Request{
+		Input: &pb.Request_Input{
+			Type: &pb.Request_Input_UserInputs_{
+				UserInputs: &pb.Request_Input_UserInputs{
+					Inputs: []*pb.Request_Input_UserInputs_UserInput{{
+						Input: &pb.Request_Input_UserInputs_UserInput_CliAgentUserQuery{
+							CliAgentUserQuery: &pb.Request_Input_CLIAgentUserQuery{
+								UserQuery: &pb.Request_Input_UserQuery{Query: "inspect the remote service"},
+							},
+						},
+					}},
+				},
+			},
+		},
+	}
+
+	inputs := extractInputs(req)
+	if len(inputs) != 1 {
+		t.Fatalf("expected one CLI agent input, got %d", len(inputs))
+	}
+	if inputs[0].Kind != "user_query" || inputs[0].Content != "inspect the remote service" {
+		t.Fatalf("unexpected CLI agent input: %+v", inputs[0])
+	}
+}
+
+func TestExtractInputsIgnoresMalformedCLIAgentUserQuery(t *testing.T) {
+	req := &pb.Request{
+		Input: &pb.Request_Input{
+			Type: &pb.Request_Input_UserInputs_{
+				UserInputs: &pb.Request_Input_UserInputs{
+					Inputs: []*pb.Request_Input_UserInputs_UserInput{{
+						Input: &pb.Request_Input_UserInputs_UserInput_CliAgentUserQuery{
+							CliAgentUserQuery: &pb.Request_Input_CLIAgentUserQuery{},
+						},
+					}},
+				},
+			},
+		},
+	}
+
+	if inputs := extractInputs(req); len(inputs) != 0 {
+		t.Fatalf("expected malformed CLI agent input to be ignored, got %+v", inputs)
+	}
+}
+
 func TestFinishEventRunsDurableEnqueueFirst(t *testing.T) {
 	committed := false
 	ctx := context.WithValue(context.Background(), beforeAgentFinishKey{}, func() { committed = true })
