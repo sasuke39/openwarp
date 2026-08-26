@@ -14,6 +14,7 @@ import (
 
 	"github.com/sasuke39/open-warp/internal/agentruntime"
 	"github.com/sasuke39/open-warp/internal/config"
+	"github.com/sasuke39/open-warp/internal/llm"
 	pb "github.com/sasuke39/open-warp/internal/proto"
 	"google.golang.org/protobuf/proto"
 )
@@ -37,7 +38,7 @@ func TestTranslateExternalToolCall(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			translated, err := translateExternalToolCall(agentruntime.ToolCall{
 				ID: "call-1", Name: test.tool, Arguments: json.RawMessage(test.args),
-			})
+			}, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -52,9 +53,29 @@ func TestTranslateExternalToolCall(t *testing.T) {
 }
 
 func TestTranslateExternalToolCallRejectsUnknownTool(t *testing.T) {
-	_, err := translateExternalToolCall(agentruntime.ToolCall{ID: "call-1", Name: "unknown", Arguments: json.RawMessage(`{}`)})
+	_, err := translateExternalToolCall(agentruntime.ToolCall{ID: "call-1", Name: "unknown", Arguments: json.RawMessage(`{}`)}, false)
 	if err == nil {
 		t.Fatal("expected unknown external tool to be rejected")
+	}
+}
+
+func TestTranslateExternalReadUsesShellInManagedSSH(t *testing.T) {
+	translated, err := translateExternalToolCall(agentruntime.ToolCall{
+		ID: "read-1", Name: agentruntime.ToolWorkspaceReadFile,
+		Arguments: json.RawMessage(`{"file_path":"/tmp/a b's.txt","offset":5,"limit":10}`),
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if translated.Name != "run_shell_command" {
+		t.Fatalf("tool = %q, want run_shell_command", translated.Name)
+	}
+	args := string(translated.Args)
+	if !strings.Contains(args, `sed -n '5,14p'`) || !strings.Contains(args, `/tmp/a b`) {
+		t.Fatalf("managed SSH read args = %s", args)
+	}
+	if !strings.Contains(args, `"is_read_only":true`) {
+		t.Fatalf("managed SSH read must be read-only: %s", args)
 	}
 }
 
@@ -85,6 +106,18 @@ func (externalRuntimeTestDriver) Exchange(_ context.Context, _ agentruntime.Turn
 }
 func (externalRuntimeTestDriver) Cancel(context.Context, string) error { return nil }
 func (externalRuntimeTestDriver) Close(context.Context) error          { return nil }
+
+type recordingExternalRuntimeDriver struct {
+	request agentruntime.TurnRequest
+}
+
+func (driver *recordingExternalRuntimeDriver) Name() string { return "recording-runtime" }
+func (driver *recordingExternalRuntimeDriver) Exchange(_ context.Context, request agentruntime.TurnRequest, emit func(agentruntime.Event) error) error {
+	driver.request = request
+	return emit(agentruntime.Event{Type: agentruntime.EventTurnCompleted})
+}
+func (driver *recordingExternalRuntimeDriver) Cancel(context.Context, string) error { return nil }
+func (driver *recordingExternalRuntimeDriver) Close(context.Context) error          { return nil }
 
 func TestRunExternalAgentCreatesTaskBeforeFirstMessage(t *testing.T) {
 	recorder := httptest.NewRecorder()
@@ -129,6 +162,75 @@ func TestRunExternalAgentDoesNotRecreateExistingTask(t *testing.T) {
 				t.Fatal("existing task must not be created again")
 			}
 		}
+	}
+}
+
+func TestRunExternalAgentCompletesPartialToolBatchBeforeResume(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	server := &Server{}
+	driver := &recordingExternalRuntimeDriver{}
+	server.setExternalPending("task-1", []llm.ToolCall{
+		{ID: "shell-call", Name: "run_shell_command"},
+		{ID: "read-call", Name: "read_files"},
+	})
+
+	if ok, awaiting := server.runExternalAgent(
+		context.Background(), driver, recorder, recorder,
+		&Conversation{}, "conversation-1", "request-1", "task-1", true,
+		[]input{{Kind: "tool_result", ToolCallID: "shell-call", Content: "ok"}}, nil,
+	); !ok || awaiting {
+		t.Fatal("expected completed external runtime continuation")
+	}
+
+	if len(driver.request.Inputs) != 2 {
+		t.Fatalf("runtime inputs = %d, want complete batch of 2", len(driver.request.Inputs))
+	}
+	if driver.request.Inputs[0].ToolCallID != "shell-call" || driver.request.Inputs[0].Status != "success" {
+		t.Fatalf("first runtime input = %+v", driver.request.Inputs[0])
+	}
+	if driver.request.Inputs[1].ToolCallID != "read-call" || driver.request.Inputs[1].Status != "error" {
+		t.Fatalf("synthesized runtime input = %+v", driver.request.Inputs[1])
+	}
+}
+
+type timeoutExternalRuntimeDriver struct {
+	cancelled chan string
+}
+
+func (driver *timeoutExternalRuntimeDriver) Name() string { return "timeout-runtime" }
+func (driver *timeoutExternalRuntimeDriver) Exchange(ctx context.Context, _ agentruntime.TurnRequest, _ func(agentruntime.Event) error) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (driver *timeoutExternalRuntimeDriver) Cancel(_ context.Context, taskID string) error {
+	driver.cancelled <- taskID
+	return nil
+}
+func (driver *timeoutExternalRuntimeDriver) Close(context.Context) error { return nil }
+
+func TestRunExternalAgentTimesOutAndCancelsFramework(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	driver := &timeoutExternalRuntimeDriver{cancelled: make(chan string, 1)}
+	server := &Server{cfg: &config.Config{Server: config.ServerConfig{StreamStallTimeoutSeconds: 1}}}
+
+	if ok, active := server.runExternalAgent(
+		context.Background(), driver, recorder, recorder,
+		&Conversation{}, "conversation-1", "request-1", "task-timeout", true,
+		[]input{{Kind: "user_query", Content: "hello"}}, nil,
+	); ok || active {
+		t.Fatal("timed-out external exchange must fail and become inactive")
+	}
+	select {
+	case taskID := <-driver.cancelled:
+		if taskID != "task-timeout" {
+			t.Fatalf("cancelled task = %q", taskID)
+		}
+	default:
+		t.Fatal("timed-out external exchange did not cancel the framework task")
+	}
+	_, errors := finishOutcome(decodeResponseEvents(t, recorder.Body.String()))
+	if len(errors) != 1 || !strings.Contains(errors[0], "did not finish") {
+		t.Fatalf("timeout errors = %+v", errors)
 	}
 }
 

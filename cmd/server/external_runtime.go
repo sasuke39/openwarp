@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/sasuke39/open-warp/internal/agent"
@@ -34,6 +35,7 @@ func (s *Server) runExternalAgent(
 		s.sendCreateTask(w, flusher, taskID)
 	}
 
+	inputs = s.completeExternalToolInputs(taskID, inputs)
 	runtimeInputs := make([]agentruntime.Input, 0, len(inputs))
 	for _, in := range inputs {
 		if in.LongRunningCommandID != "" {
@@ -55,6 +57,10 @@ func (s *Server) runExternalAgent(
 		}
 		runtimeInputs = append(runtimeInputs, item)
 	}
+	if len(runtimeInputs) == 0 {
+		s.sendEvent(w, flusher, finishEvent(&pb.ResponseEvent_StreamFinished_Done{}))
+		return true, s.hasExternalPending(taskID)
+	}
 	request := agentruntime.TurnRequest{
 		ConversationID: conversationID,
 		TaskID:         taskID,
@@ -64,8 +70,6 @@ func (s *Server) runExternalAgent(
 		Inputs:         runtimeInputs,
 		Metadata:       map[string]string{"driver": driver.Name(), "project_key": conv.ProjectKey},
 	}
-	s.removeExternalPending(taskID, runtimeInputs)
-
 	outputMessageID := uuid.NewString()
 	sawText := false
 	sawAwaitingTool := false
@@ -84,8 +88,9 @@ func (s *Server) runExternalAgent(
 				s.sendAppendText(w, flusher, taskID, outputMessageID, event.Text)
 			}
 		case agentruntime.EventToolCallBatch:
+			_, managedSSH := agent.ManagedSSHTargetFromInput(executionContext)
 			for _, call := range event.ToolCalls {
-				translated, err := translateExternalToolCall(call)
+				translated, err := translateExternalToolCall(call, managedSSH)
 				if err != nil {
 					return err
 				}
@@ -115,7 +120,18 @@ func (s *Server) runExternalAgent(
 	}
 
 	log.Printf("[RUNTIME:%s] exchange conv=%s task=%s inputs=%d", driver.Name(), conversationID, taskID, len(runtimeInputs))
-	if err := driver.Exchange(ctx, request, emit); err != nil {
+	exchangeCtx, cancelExchange := context.WithTimeout(ctx, s.externalRuntimeExchangeTimeout())
+	defer cancelExchange()
+	if err := driver.Exchange(exchangeCtx, request, emit); err != nil {
+		if exchangeCtx.Err() == context.DeadlineExceeded {
+			cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if cancelErr := driver.Cancel(cancelCtx, taskID); cancelErr != nil {
+				log.Printf("[RUNTIME:%s] cancel timed-out exchange task=%s: %v", driver.Name(), taskID, cancelErr)
+			}
+			cancel()
+			s.sendFinishError(w, flusher, fmt.Sprintf("%s runtime did not finish within %s", driver.Name(), s.externalRuntimeExchangeTimeout()))
+			return false, false
+		}
 		if ctx.Err() != nil {
 			s.sendFinishError(w, flusher, "Agent task was cancelled")
 		} else {
@@ -127,7 +143,14 @@ func (s *Server) runExternalAgent(
 	return true, sawAwaitingTool || sawSteered
 }
 
-func translateExternalToolCall(call agentruntime.ToolCall) (llm.ToolCall, error) {
+func (s *Server) externalRuntimeExchangeTimeout() time.Duration {
+	if s != nil && s.cfg != nil && s.cfg.Server.StreamStallTimeoutSeconds > 0 {
+		return time.Duration(s.cfg.Server.StreamStallTimeoutSeconds) * time.Second
+	}
+	return 120 * time.Second
+}
+
+func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm.ToolCall, error) {
 	marshal := func(name string, value any) (llm.ToolCall, error) {
 		raw, err := json.Marshal(value)
 		if err != nil {
@@ -165,6 +188,13 @@ func translateExternalToolCall(call agentruntime.ToolCall) (llm.ToolCall, error)
 		}
 		if args.Limit <= 0 {
 			args.Limit = 200
+		}
+		if managedSSH {
+			end := args.Offset + args.Limit - 1
+			command := fmt.Sprintf("sed -n '%d,%dp' < %s", args.Offset, end, shellQuote(args.FilePath))
+			return marshal("run_shell_command", map[string]any{
+				"command": command, "is_read_only": true, "is_risky": false, "risk_category": "",
+			})
 		}
 		return marshal("read_files", map[string]any{"files": []any{map[string]any{
 			"name": args.FilePath, "line_ranges": []any{map[string]int{"start": args.Offset, "end": args.Offset + args.Limit - 1}},
