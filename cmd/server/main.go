@@ -62,7 +62,8 @@ type Server struct {
 	conversations    map[string]*Conversation
 	runningTasks     sync.Map // taskID → context.CancelFunc
 	externalTasks    sync.Map // taskID → agentruntime.Driver while a framework turn is active
-	externalPending  sync.Map // taskID → immutable []string of pending workspace tool call IDs
+	externalPending  sync.Map // taskID → *externalToolBatch completion barrier
+	externalFinished sync.Map // taskID → bounded *externalToolResultHistory tombstones
 	runtimeDriver    agentruntime.Driver
 	cfg              *config.Config
 	configPath       string
@@ -481,7 +482,7 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.externalTasks.Delete(taskID)
-			s.externalPending.Delete(taskID)
+			s.finishExternalPending(taskID)
 		}
 	} else if cancel, ok := s.runningTasks.Load(taskID); ok {
 		if fn, ok := cancel.(context.CancelFunc); ok {
@@ -642,7 +643,7 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 			s.externalTasks.Store(taskID, runtimeDriver)
 		} else {
 			s.externalTasks.Delete(taskID)
-			s.externalPending.Delete(taskID)
+			s.finishExternalPending(taskID)
 		}
 		s.runtimeMu.RUnlock()
 		conv.mu.Unlock()
