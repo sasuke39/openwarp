@@ -26,30 +26,64 @@ interface SessionState extends ToolOwner {
 
 export class PiAgentRuntime {
   private readonly sessions = new Map<string, SessionState>()
+  private readonly queues = new Map<string, Promise<void>>()
   private readonly broker = new WorkspaceToolBroker()
   private modelRuntimePromise: Promise<ModelRuntime> | undefined
 
   constructor(private readonly emitFrame: (exchangeId: string, event: RuntimeEvent) => void) {}
 
   async handle(frame: Envelope): Promise<void> {
+    if (frame.type === 'runtime.shutdown') {
+      await this.shutdown()
+      return
+    }
+    const conversationId = this.conversationFor(frame)
+    await this.enqueue(conversationId, async () => this.handleSerial(frame))
+  }
+
+  private async handleSerial(frame: Envelope): Promise<void> {
     switch (frame.type) {
       case 'turn.start':
         await this.startTurn(frame.exchange_id, frame.payload as TurnRequest)
         return
       case 'turn.resume':
-        this.resumeTurn(frame.exchange_id, frame.payload as TurnRequest)
+        await this.resumeTurn(frame.exchange_id, frame.payload as TurnRequest)
+        return
+      case 'turn.steer':
+        await this.steerTurn(frame.exchange_id, frame.payload as TurnRequest)
         return
       case 'turn.cancel': {
         const taskId = (frame.payload as { task_id?: unknown })?.task_id
         if (typeof taskId !== 'string' || taskId.length === 0) throw new Error('turn.cancel requires task_id')
+        this.emitFrame(frame.exchange_id, { type: 'turn.cancelling' })
         await this.cancelTask(taskId)
+        this.emitFrame(frame.exchange_id, { type: 'turn.cancelled' })
         return
       }
-      case 'runtime.shutdown':
-        await this.shutdown()
-        return
       default:
         throw new Error(`unsupported frame type ${frame.type}`)
+    }
+  }
+
+  private conversationFor(frame: Envelope): string {
+    const payload = frame.payload as { conversation_id?: unknown; task_id?: unknown } | undefined
+    if (typeof payload?.conversation_id === 'string' && payload.conversation_id.length > 0) return payload.conversation_id
+    if (typeof payload?.task_id === 'string') {
+      const match = [...this.sessions.values()].find(state => state.taskId === payload.task_id)
+      if (match !== undefined) return match.conversationId
+      return `task:${payload.task_id}`
+    }
+    return `exchange:${frame.exchange_id}`
+  }
+
+  private async enqueue(conversationId: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.queues.get(conversationId) ?? Promise.resolve()
+    const current = previous.catch(() => undefined).then(operation)
+    this.queues.set(conversationId, current)
+    try {
+      await current
+    } finally {
+      if (this.queues.get(conversationId) === current) this.queues.delete(conversationId)
     }
   }
 
@@ -81,7 +115,7 @@ export class PiAgentRuntime {
     void this.runPrompt(state, runToken, prompt)
   }
 
-  private resumeTurn(exchangeId: string, request: TurnRequest): void {
+  private async resumeTurn(exchangeId: string, request: TurnRequest): Promise<void> {
     const state = this.sessions.get(request.conversation_id)
     if (state === undefined || !state.active) throw new Error(`conversation ${request.conversation_id} has no suspended turn`)
     state.exchangeId = exchangeId
@@ -90,12 +124,26 @@ export class PiAgentRuntime {
     let delivered = 0
     for (const input of request.inputs) {
       if (input.kind !== 'tool.result' || input.tool_call_id === undefined) continue
-      if (!this.broker.deliver(input.tool_call_id, input.content)) {
+      const content = input.status === 'rejected'
+        ? `The user rejected this tool call. ${input.content}`.trim()
+        : input.content
+      if (!this.broker.deliver(input.tool_call_id, content)) {
         throw new Error(`unknown external tool call ${input.tool_call_id}`)
       }
       delivered++
     }
     if (delivered === 0) throw new Error('turn.resume requires at least one tool result')
+    const steer = request.inputs.filter(input => input.kind === 'user.steer').map(input => input.content).join('\n\n')
+    if (steer.length > 0) await state.session.steer(steer)
+  }
+
+  private async steerTurn(exchangeId: string, request: TurnRequest): Promise<void> {
+    const state = this.sessions.get(request.conversation_id)
+    if (state === undefined || !state.active) throw new Error(`conversation ${request.conversation_id} has no running turn to steer`)
+    const prompt = request.inputs.filter(input => input.kind === 'user.steer').map(input => input.content).join('\n\n')
+    if (prompt.length === 0) throw new Error('turn.steer requires a steering message')
+    await state.session.steer(prompt)
+    this.emitFrame(exchangeId, { type: 'turn.steered' })
   }
 
   private async cancelTask(taskId: string): Promise<void> {
@@ -104,10 +152,11 @@ export class PiAgentRuntime {
   }
 
   private async cancelState(state: SessionState, reason: string): Promise<void> {
-    state.active = false
     state.runToken++
     this.broker.cancel(state, reason)
     await state.session.abort()
+    await state.session.waitForIdle()
+    state.active = false
   }
 
   private async createState(exchangeId: string, request: TurnRequest): Promise<SessionState> {
@@ -138,7 +187,7 @@ export class PiAgentRuntime {
       active: false,
       emit: (event: RuntimeEvent) => {
         const current = this.sessions.get(request.conversation_id)
-        if (current !== undefined) this.emitFrame(current.exchangeId, event)
+        if (current === state) this.emitFrame(current.exchangeId, event)
       },
     }
     const modelRuntime = await this.modelRuntime()

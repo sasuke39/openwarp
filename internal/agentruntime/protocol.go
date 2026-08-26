@@ -13,6 +13,7 @@ type InputKind string
 
 const (
 	InputUserMessage InputKind = "user.message"
+	InputUserSteer   InputKind = "user.steer"
 	InputToolResult  InputKind = "tool.result"
 )
 
@@ -20,6 +21,7 @@ type Input struct {
 	Kind       InputKind `json:"kind"`
 	Content    string    `json:"content"`
 	ToolCallID string    `json:"tool_call_id,omitempty"`
+	Status     string    `json:"status,omitempty"`
 }
 
 type TurnRequest struct {
@@ -55,6 +57,9 @@ const (
 	EventToolCallBatch  EventType = "tool.call.batch"
 	EventTodoChanged    EventType = "todo.changed"
 	EventTurnAwaiting   EventType = "turn.awaiting_tool"
+	EventTurnSteered    EventType = "turn.steered"
+	EventTurnCancelling EventType = "turn.cancelling"
+	EventTurnCancelled  EventType = "turn.cancelled"
 	EventTurnCompleted  EventType = "turn.completed"
 	EventTurnFailed     EventType = "turn.failed"
 	EventDiagnostic     EventType = "diagnostic"
@@ -70,7 +75,7 @@ type Event struct {
 
 func (e Event) IsExchangeTerminal() bool {
 	switch e.Type {
-	case EventTurnAwaiting, EventTurnCompleted, EventTurnFailed:
+	case EventTurnAwaiting, EventTurnSteered, EventTurnCancelled, EventTurnCompleted, EventTurnFailed:
 		return true
 	default:
 		return false

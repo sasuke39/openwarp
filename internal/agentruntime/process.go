@@ -28,14 +28,16 @@ type ProcessConfig struct {
 type ProcessDriver struct {
 	cfg ProcessConfig
 
-	startMu sync.Mutex
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	pending map[string]chan processResult
-	closed  bool
-	done    chan struct{}
+	startMu   sync.Mutex
+	writeMu   sync.Mutex
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	pending   map[string]chan processResult
+	tasks     map[string]string
+	exchanges map[string]string
+	closed    bool
+	done      chan struct{}
 }
 
 type processResult struct {
@@ -53,7 +55,10 @@ func NewProcessDriver(cfg ProcessConfig) (*ProcessDriver, error) {
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = 5 * time.Second
 	}
-	return &ProcessDriver{cfg: cfg, pending: make(map[string]chan processResult)}, nil
+	return &ProcessDriver{
+		cfg: cfg, pending: make(map[string]chan processResult), tasks: make(map[string]string),
+		exchanges: make(map[string]string),
+	}, nil
 }
 
 func (d *ProcessDriver) Name() string { return d.cfg.Name }
@@ -77,16 +82,21 @@ func (d *ProcessDriver) Exchange(ctx context.Context, request TurnRequest, emit 
 		return fmt.Errorf("agent runtime driver is closed")
 	}
 	d.pending[exchangeID] = results
+	d.tasks[request.TaskID] = request.ConversationID
+	d.exchanges[exchangeID] = request.TaskID
 	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
 		delete(d.pending, exchangeID)
+		delete(d.exchanges, exchangeID)
 		d.mu.Unlock()
 	}()
 
 	frameType := "turn.start"
-	if isToolResultOnly(request.Inputs) {
+	if hasToolResult(request.Inputs) {
 		frameType = "turn.resume"
+	} else if isSteerOnly(request.Inputs) {
+		frameType = "turn.steer"
 	}
 	envelope, err := NewEnvelope(exchangeID, frameType, request)
 	if err != nil {
@@ -99,7 +109,9 @@ func (d *ProcessDriver) Exchange(ctx context.Context, request TurnRequest, emit 
 	for {
 		select {
 		case <-ctx.Done():
-			_ = d.Cancel(context.Background(), request.TaskID)
+			cancelCtx, cancel := context.WithTimeout(context.Background(), d.cfg.ShutdownTimeout)
+			defer cancel()
+			_ = d.Cancel(cancelCtx, request.TaskID)
 			return ctx.Err()
 		case result := <-results:
 			if result.err != nil {
@@ -109,6 +121,11 @@ func (d *ProcessDriver) Exchange(ctx context.Context, request TurnRequest, emit 
 				return err
 			}
 			if result.event.IsExchangeTerminal() {
+				if result.event.Type == EventTurnCompleted || result.event.Type == EventTurnFailed || result.event.Type == EventTurnCancelled {
+					d.mu.Lock()
+					delete(d.tasks, request.TaskID)
+					d.mu.Unlock()
+				}
 				if result.event.Type == EventTurnFailed {
 					return errors.New(result.event.Error)
 				}
@@ -125,11 +142,57 @@ func (d *ProcessDriver) Cancel(ctx context.Context, taskID string) error {
 	if err := d.ensureStarted(); err != nil {
 		return err
 	}
-	envelope, err := NewEnvelope(uuid.NewString(), "turn.cancel", map[string]string{"task_id": taskID})
+	exchangeID := uuid.NewString()
+	results := make(chan processResult, 8)
+	d.mu.Lock()
+	conversationID := d.tasks[taskID]
+	d.pending[exchangeID] = results
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		delete(d.pending, exchangeID)
+		d.mu.Unlock()
+	}()
+	envelope, err := NewEnvelope(exchangeID, "turn.cancel", map[string]string{
+		"task_id": taskID, "conversation_id": conversationID,
+	})
 	if err != nil {
 		return err
 	}
-	return d.writeEnvelope(envelope)
+	if err := d.writeEnvelope(envelope); err != nil {
+		return err
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result := <-results:
+			if result.err != nil {
+				return result.err
+			}
+			if result.event.Type == EventTurnCancelled {
+				d.mu.Lock()
+				delete(d.tasks, taskID)
+				var taskResults []chan processResult
+				for pendingID, pendingTaskID := range d.exchanges {
+					if pendingID != exchangeID && pendingTaskID == taskID {
+						taskResults = append(taskResults, d.pending[pendingID])
+					}
+				}
+				d.mu.Unlock()
+				for _, taskResult := range taskResults {
+					select {
+					case taskResult <- processResult{event: Event{Type: EventTurnCancelled}}:
+					default:
+					}
+				}
+				return nil
+			}
+			if result.event.Type == EventTurnFailed {
+				return errors.New(result.event.Error)
+			}
+		}
+	}
 }
 
 func (d *ProcessDriver) Close(ctx context.Context) error {
@@ -329,7 +392,7 @@ func validateTurnRequest(request TurnRequest) error {
 	}
 	for index, input := range request.Inputs {
 		switch input.Kind {
-		case InputUserMessage:
+		case InputUserMessage, InputUserSteer:
 			if strings.TrimSpace(input.Content) == "" {
 				return fmt.Errorf("input %d user message is empty", index)
 			}
@@ -344,14 +407,23 @@ func validateTurnRequest(request TurnRequest) error {
 	return nil
 }
 
-func isToolResultOnly(inputs []Input) bool {
+func isSteerOnly(inputs []Input) bool {
 	if len(inputs) == 0 {
 		return false
 	}
 	for _, input := range inputs {
-		if input.Kind != InputToolResult {
+		if input.Kind != InputUserSteer {
 			return false
 		}
 	}
 	return true
+}
+
+func hasToolResult(inputs []Input) bool {
+	for _, input := range inputs {
+		if input.Kind == InputToolResult {
+			return true
+		}
+	}
+	return false
 }

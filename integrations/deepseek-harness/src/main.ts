@@ -26,6 +26,7 @@ const configPath = join(integrationRoot, 'cordis.yml')
 const socketPath = join(tmpdir(), `open-warp-dsh-${process.pid}.sock`)
 const sessionRoot = process.env.DSH_SESSION_ROOT ?? join(tmpdir(), 'open-warp-dsh-sessions')
 const sessions = new Map<string, SessionState>()
+const queues = new Map<string, Promise<void>>()
 const callOwners = new Map<string, Socket>()
 const toolSockets = new Set<Socket>()
 let shutdownPromise: Promise<void> | undefined
@@ -45,33 +46,70 @@ await new Promise<void>((resolve, reject) => {
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
 lines.on('line', line => {
   if (line.trim().length === 0) return
-  void handleFrame(line).catch(error => writeEvent('runtime', {
-    type: 'turn.failed',
-    error: error instanceof Error ? error.message : String(error),
-  }))
+  let exchangeId = 'runtime'
+  void (async () => {
+    try {
+      const frame = parseEnvelope(line)
+      exchangeId = frame.exchange_id
+      await handleFrame(frame)
+    } catch (error) {
+      writeEvent(exchangeId, { type: 'turn.failed', error: error instanceof Error ? error.message : String(error) })
+    }
+  })()
 })
 lines.on('close', () => void shutdown())
 
-async function handleFrame(line: string): Promise<void> {
-  const frame = parseEnvelope(line)
+async function handleFrame(frame: ReturnType<typeof parseEnvelope>): Promise<void> {
+  if (frame.type === 'runtime.shutdown') {
+    await shutdown()
+    return
+  }
+  const conversationId = conversationFor(frame)
+  await enqueue(conversationId, async () => handleSerial(frame))
+}
+
+async function handleSerial(frame: ReturnType<typeof parseEnvelope>): Promise<void> {
   switch (frame.type) {
     case 'turn.start':
       startTurn(frame.exchange_id, frame.payload as TurnRequest)
       return
     case 'turn.resume':
-      resumeTurn(frame.exchange_id, frame.payload as TurnRequest)
+      await resumeTurn(frame.exchange_id, frame.payload as TurnRequest)
+      return
+    case 'turn.steer':
+      await steerTurn(frame.exchange_id, frame.payload as TurnRequest)
       return
     case 'turn.cancel': {
       const taskId = (frame.payload as { task_id?: unknown })?.task_id
       if (typeof taskId !== 'string') throw new Error('turn.cancel requires task_id')
+      writeEvent(frame.exchange_id, { type: 'turn.cancelling' })
       await cancelTask(taskId)
+      writeEvent(frame.exchange_id, { type: 'turn.cancelled' })
       return
     }
-    case 'runtime.shutdown':
-      await shutdown()
-      return
     default:
       throw new Error(`unsupported frame type ${frame.type}`)
+  }
+}
+
+function conversationFor(frame: ReturnType<typeof parseEnvelope>): string {
+  const payload = frame.payload as { conversation_id?: unknown; task_id?: unknown } | undefined
+  if (typeof payload?.conversation_id === 'string' && payload.conversation_id.length > 0) return payload.conversation_id
+  if (typeof payload?.task_id === 'string') {
+    const match = [...sessions.entries()].find(([, state]) => state.taskId === payload.task_id)
+    return match?.[0] ?? `task:${payload.task_id}`
+  }
+  return `exchange:${frame.exchange_id}`
+}
+
+async function enqueue(conversationId: string, operation: () => Promise<void>): Promise<void> {
+  const previous = queues.get(conversationId) ?? Promise.resolve()
+  const current = previous.catch(() => undefined).then(operation)
+  queues.set(conversationId, current)
+  try {
+    await current
+  } finally {
+    if (queues.get(conversationId) === current) queues.delete(conversationId)
   }
 }
 
@@ -129,7 +167,7 @@ function startTurn(exchangeId: string, request: TurnRequest): void {
     onNotification: notification => onNotification(request.conversation_id, notification),
   }).then(result => {
     const current = sessions.get(request.conversation_id)
-    if (current === undefined) return
+    if (current !== state) return
     if (!current.sawTextDelta && result.finalResponse.length > 0) {
       writeEvent(current.exchangeId, { type: 'assistant.final', text: result.finalResponse })
     }
@@ -141,7 +179,7 @@ function startTurn(exchangeId: string, request: TurnRequest): void {
     writeEvent(current.exchangeId, { type: 'turn.completed' })
   }).catch(error => {
     const current = sessions.get(request.conversation_id)
-    if (current === undefined) return
+    if (current !== state) return
     current.running = false
     writeEvent(current.exchangeId, {
       type: 'turn.failed',
@@ -150,7 +188,7 @@ function startTurn(exchangeId: string, request: TurnRequest): void {
   })
 }
 
-function resumeTurn(exchangeId: string, request: TurnRequest): void {
+async function resumeTurn(exchangeId: string, request: TurnRequest): Promise<void> {
   const state = sessions.get(request.conversation_id)
   if (state === undefined || !state.running) throw new Error(`conversation ${request.conversation_id} has no suspended turn`)
   state.exchangeId = exchangeId
@@ -160,8 +198,26 @@ function resumeTurn(exchangeId: string, request: TurnRequest): void {
     const owner = callOwners.get(input.tool_call_id)
     if (owner === undefined) throw new Error(`unknown external tool call ${input.tool_call_id}`)
     callOwners.delete(input.tool_call_id)
-    owner.write(`${JSON.stringify({ type: 'tool.result', id: input.tool_call_id, content: input.content })}\n`)
+    const content = input.status === 'rejected'
+      ? `The user rejected this tool call. ${input.content}`.trim()
+      : input.content
+    owner.write(`${JSON.stringify({ type: 'tool.result', id: input.tool_call_id, content })}\n`)
   }
+  const steer = request.inputs.filter(input => input.kind === 'user.steer').map(input => input.content).join('\n\n')
+  if (steer.length > 0) {
+    await state.harness.start()
+    await state.harness.client.prompt(request.conversation_id, [{ type: 'text', text: steer }])
+  }
+}
+
+async function steerTurn(exchangeId: string, request: TurnRequest): Promise<void> {
+  const state = sessions.get(request.conversation_id)
+  if (state === undefined || !state.running) throw new Error(`conversation ${request.conversation_id} has no running turn to steer`)
+  const prompt = request.inputs.filter(input => input.kind === 'user.steer').map(input => input.content).join('\n\n')
+  if (prompt.length === 0) throw new Error('turn.steer requires a steering message')
+  await state.harness.start()
+  await state.harness.client.prompt(request.conversation_id, [{ type: 'text', text: prompt }])
+  writeEvent(exchangeId, { type: 'turn.steered' })
 }
 
 function onNotification(conversationId: string, notification: HarnessNotification): void {
@@ -283,6 +339,7 @@ function workspaceToolName(dshName: string): string {
 }
 
 function assertSupportedNode(): void {
+  if (process.env.DSH_RUNTIME_SKIP_NODE_CHECK === 'true') return
   const [major = 0, minor = 0] = process.versions.node.split('.').map(Number)
   if (major >= 24 || (major === 22 && minor >= 19)) return
   throw new Error(`DeepSeek Harness requires Node ^22.19 or >=24; current runtime is ${process.versions.node}`)
