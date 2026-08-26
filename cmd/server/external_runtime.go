@@ -25,7 +25,7 @@ func (s *Server) runExternalAgent(
 	taskAlreadyExists bool,
 	inputs []input,
 	executionContext *pb.InputContext,
-) (ok bool, awaitingTool bool) {
+) (ok bool, turnActive bool) {
 	// Keep the external-runtime event sequence identical to the native agent
 	// loop. When Warp did not provide a task in TaskContext, the generated task
 	// ID is unknown to the client until CreateTask arrives. Sending output first
@@ -42,10 +42,12 @@ func (s *Server) runExternalAgent(
 		if in.ShellCommandCompleted {
 			conv.LastLongRunningCommandID = ""
 		}
-		item := agentruntime.Input{Content: in.Content, ToolCallID: in.ToolCallID}
+		item := agentruntime.Input{Content: in.Content, ToolCallID: in.ToolCallID, Status: in.Status}
 		switch in.Kind {
 		case "user_query":
 			item.Kind = agentruntime.InputUserMessage
+		case "user_steer":
+			item.Kind = agentruntime.InputUserSteer
 		case "tool_result":
 			item.Kind = agentruntime.InputToolResult
 		default:
@@ -62,10 +64,12 @@ func (s *Server) runExternalAgent(
 		Inputs:         runtimeInputs,
 		Metadata:       map[string]string{"driver": driver.Name(), "project_key": conv.ProjectKey},
 	}
+	s.removeExternalPending(taskID, runtimeInputs)
 
 	outputMessageID := uuid.NewString()
 	sawText := false
 	sawAwaitingTool := false
+	sawSteered := false
 	var pending []llm.ToolCall
 	emit := func(event agentruntime.Event) error {
 		switch event.Type {
@@ -101,6 +105,9 @@ func (s *Server) runExternalAgent(
 			if err := s.sendToolCalls(w, flusher, conv, taskID, pending); err != nil {
 				return err
 			}
+			s.setExternalPending(taskID, pending)
+		case agentruntime.EventTurnSteered:
+			sawSteered = true
 		case agentruntime.EventDiagnostic:
 			log.Printf("[RUNTIME:%s] %s", driver.Name(), event.Text)
 		}
@@ -117,7 +124,7 @@ func (s *Server) runExternalAgent(
 		return false, false
 	}
 	s.sendEvent(w, flusher, finishEvent(&pb.ResponseEvent_StreamFinished_Done{}))
-	return true, sawAwaitingTool
+	return true, sawAwaitingTool || sawSteered
 }
 
 func translateExternalToolCall(call agentruntime.ToolCall) (llm.ToolCall, error) {

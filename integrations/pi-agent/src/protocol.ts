@@ -8,9 +8,10 @@ export interface Envelope<T = unknown> {
 }
 
 export interface RuntimeInput {
-  kind: 'user.message' | 'tool.result'
+  kind: 'user.message' | 'user.steer' | 'tool.result'
   content: string
   tool_call_id?: string
+  status?: string
 }
 
 export interface TurnRequest {

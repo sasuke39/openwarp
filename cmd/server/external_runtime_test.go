@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -217,5 +218,90 @@ func TestHandleCancelTaskCancelsSuspendedExternalTurn(t *testing.T) {
 	}
 	if _, ok := server.externalTasks.Load("task-suspended"); ok {
 		t.Fatal("cancelled external task must be removed")
+	}
+}
+
+type blockingExternalDriver struct {
+	started   chan struct{}
+	cancelled chan string
+	stopped   chan struct{}
+	stopOnce  sync.Once
+}
+
+func (driver *blockingExternalDriver) Name() string { return "blocking-runtime" }
+func (driver *blockingExternalDriver) Exchange(ctx context.Context, _ agentruntime.TurnRequest, _ func(agentruntime.Event) error) error {
+	close(driver.started)
+	select {
+	case <-driver.stopped:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (driver *blockingExternalDriver) Cancel(_ context.Context, taskID string) error {
+	driver.cancelled <- taskID
+	driver.stopOnce.Do(func() { close(driver.stopped) })
+	return nil
+}
+func (driver *blockingExternalDriver) Close(context.Context) error { return nil }
+
+func TestHandleCancelTaskAcknowledgesRunningExternalTurn(t *testing.T) {
+	disabled := false
+	driver := &blockingExternalDriver{
+		started: make(chan struct{}), cancelled: make(chan string, 1), stopped: make(chan struct{}),
+	}
+	server := NewServer(&config.Config{
+		Provider: "openai", BaseURL: "http://test.invalid/v1", APIKey: "test-key", Model: "test-model",
+		Memory: config.MemoryConfig{Enabled: &disabled},
+	}, filepath.Join(t.TempDir(), "config.yaml"))
+	server.runtimeDriver = driver
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := server.closeBackground(ctx); err != nil {
+			t.Errorf("close test server: %v", err)
+		}
+	})
+
+	raw, err := proto.Marshal(&pb.Request{
+		TaskContext: &pb.Request_TaskContext{Tasks: []*pb.Task{{Id: "task-running"}}},
+		Input: &pb.Request_Input{Type: &pb.Request_Input_UserQuery_{
+			UserQuery: &pb.Request_Input_UserQuery{Query: "keep working"},
+		}},
+		Metadata: &pb.Request_Metadata{ConversationId: "conversation-running"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		server.handleAgentRequest(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/ai/multi-agent", bytes.NewReader(raw)))
+	}()
+	select {
+	case <-driver.started:
+	case <-time.After(time.Second):
+		t.Fatal("external exchange did not start")
+	}
+
+	recorder := httptest.NewRecorder()
+	cancelRequest := httptest.NewRequest(http.MethodPost, "/agent/tasks/task-running/cancel", nil)
+	cancelRequest.SetPathValue("task_id", "task-running")
+	server.handleCancelTask(recorder, cancelRequest)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d, want 200", recorder.Code)
+	}
+	select {
+	case taskID := <-driver.cancelled:
+		if taskID != "task-running" {
+			t.Fatalf("cancelled task = %q", taskID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("running external runtime was not cancelled")
+	}
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled request did not finish")
 	}
 }

@@ -62,6 +62,7 @@ type Server struct {
 	conversations    map[string]*Conversation
 	runningTasks     sync.Map // taskID → context.CancelFunc
 	externalTasks    sync.Map // taskID → agentruntime.Driver while a framework turn is active
+	externalPending  sync.Map // taskID → immutable []string of pending workspace tool call IDs
 	runtimeDriver    agentruntime.Driver
 	cfg              *config.Config
 	configPath       string
@@ -470,20 +471,21 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing task_id", http.StatusBadRequest)
 		return
 	}
-	if cancel, ok := s.runningTasks.Load(taskID); ok {
-		if fn, ok := cancel.(context.CancelFunc); ok {
-			fn()
-		}
-	}
-	if value, ok := s.externalTasks.LoadAndDelete(taskID); ok {
+	if value, ok := s.externalTasks.Load(taskID); ok {
 		if driver, ok := value.(agentruntime.Driver); ok {
-			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 			defer cancel()
 			if err := driver.Cancel(ctx, taskID); err != nil {
 				log.Printf("[RUNTIME:%s] cancel task %s: %v", driver.Name(), taskID, err)
 				http.Error(w, "failed to cancel external agent task", http.StatusBadGateway)
 				return
 			}
+			s.externalTasks.Delete(taskID)
+			s.externalPending.Delete(taskID)
+		}
+	} else if cancel, ok := s.runningTasks.Load(taskID); ok {
+		if fn, ok := cancel.(context.CancelFunc); ok {
+			fn()
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -565,12 +567,18 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conv.mu.Lock()
+	isSteer := false
+	if !isFollowUp && len(inputs) > 0 {
+		if _, active := s.externalTasks.Load(taskID); active {
+			isSteer = true
+		}
+	}
 	if conv.CreatedAt.IsZero() {
 		conv.CreatedAt = time.Now().UTC()
 	}
 	requestID := uuid.New().String()
 	runID := uuid.New().String()
-	if isFollowUp && conv.LastRequestID != "" && conv.LastRunID != "" {
+	if (isFollowUp || isSteer) && conv.LastRequestID != "" && conv.LastRunID != "" {
 		requestID = conv.LastRequestID
 		runID = conv.LastRunID
 	} else {
@@ -612,15 +620,14 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 	s.runtimeMu.RLock()
 	runtimeDriver := s.runtimeDriver
 	if runtimeDriver != nil {
-		// A framework turn spans multiple HTTP exchanges while Warp executes tools.
-		// If a new user message arrives before the previous turn was resumed (for
-		// example after the user rejected a tool), terminate that stale turn first.
-		if !isFollowUp {
-			if value, ok := s.externalTasks.LoadAndDelete(taskID); ok {
-				if activeDriver, ok := value.(agentruntime.Driver); ok {
-					if err := activeDriver.Cancel(context.Background(), taskID); err != nil {
-						log.Printf("[RUNTIME:%s] cancel stale task %s before new input: %v", activeDriver.Name(), taskID, err)
-					}
+		// Input submitted while this task is still active steers the current Turn.
+		// It is injected by the framework before its next model exchange; it does
+		// not start a competing prompt and does not cancel an executing PTY command.
+		if isSteer {
+			inputs = append(s.externalRejectedToolInputs(&req, taskID), inputs...)
+			for index := range inputs {
+				if inputs[index].Kind == "user_query" {
+					inputs[index].Kind = "user_steer"
 				}
 			}
 		}
@@ -628,12 +635,14 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		s.runningTasks.Store(taskID, cancel)
 		defer s.runningTasks.Delete(taskID)
+		s.externalTasks.Store(taskID, runtimeDriver)
 
-		_, awaitingTool := s.runExternalAgent(ctx, runtimeDriver, w, flusher, conv, convID, requestID, taskID, isFollowUp || taskIDFromClient, inputs, req.GetInput().GetContext())
-		if awaitingTool {
+		_, turnActive := s.runExternalAgent(ctx, runtimeDriver, w, flusher, conv, convID, requestID, taskID, isFollowUp || isSteer || taskIDFromClient, inputs, req.GetInput().GetContext())
+		if turnActive {
 			s.externalTasks.Store(taskID, runtimeDriver)
 		} else {
 			s.externalTasks.Delete(taskID)
+			s.externalPending.Delete(taskID)
 		}
 		s.runtimeMu.RUnlock()
 		conv.mu.Unlock()
@@ -699,9 +708,10 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 type input struct {
-	Kind                  string // "user_query" or "tool_result"
+	Kind                  string // "user_query", "user_steer", or "tool_result"
 	Content               string
 	ToolCallID            string
+	Status                string
 	LongRunningCommandID  string
 	ShellCommandCompleted bool
 }
@@ -748,6 +758,9 @@ func extractToolResult(tc *pb.Request_Input_ToolCallResult) input {
 		ToolCallID: tc.GetToolCallId(),
 	}
 	if result := tc.GetRunShellCommand(); result != nil {
+		if result.GetPermissionDenied() != nil {
+			ui.Status = "rejected"
+		}
 		if snapshot := result.GetLongRunningCommandSnapshot(); snapshot != nil {
 			ui.LongRunningCommandID = snapshot.GetCommandId()
 		}
