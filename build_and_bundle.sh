@@ -64,7 +64,7 @@ echo "  -> bin/warp-local-adapter"
 echo ""
 echo "=== Step 3/6: Building warp (WarpLocal client binary) ==="
 cd "$WARP_SRC"
-cargo build --bin warp -F skip_firebase_anonymous_user
+cargo build --bin warp --features skip_firebase_anonymous_user,ssh_drag_and_drop
 echo "  -> target/debug/warp"
 
 echo ""
