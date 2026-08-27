@@ -352,8 +352,8 @@ func managedBackgroundReadCommand(commandID string) string {
 	dir := managedBackgroundJobDir(commandID)
 	return "job_dir=" + shellQuote(dir) +
 		"; test -r \"$job_dir/pid\" || { echo 'unknown command_id'; exit 1; }; pid=$(cat \"$job_dir/pid\"); " +
-		"if kill -0 \"$pid\" 2>/dev/null; then status=running; elif test -r \"$job_dir/exit\"; then status=exited:$(cat \"$job_dir/exit\"); else status=stopped; fi; " +
-		"printf 'command_id=%s pid=%s status=%s\\n' " + shellQuote(commandID) + " \"$pid\" \"$status\"; tail -c 65536 \"$job_dir/output\" 2>/dev/null || true"
+		"if kill -0 \"$pid\" 2>/dev/null; then _warplocal_status=running; elif test -r \"$job_dir/exit\"; then _warplocal_status=exited:$(cat \"$job_dir/exit\"); else _warplocal_status=stopped; fi; " +
+		"printf 'command_id=%s pid=%s status=%s\\n' " + shellQuote(commandID) + " \"$pid\" \"$_warplocal_status\"; tail -c 65536 \"$job_dir/output\" 2>/dev/null || true"
 }
 
 func managedBackgroundWriteCommand(commandID, input string) string {
