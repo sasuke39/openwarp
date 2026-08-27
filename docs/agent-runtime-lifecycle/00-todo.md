@@ -47,6 +47,7 @@
 
 ## 验收
 
+- [x] 模拟终端全链路覆盖后台启动、并行主 PTY、读取、终止及同会话下一 Turn。
 - [ ] 生成、等待工具、工具拒绝阶段均可 Stop，重复 Stop 无副作用。
 - [x] Stop/Reject 后同一 Conversation 可立即开启下一 Turn。
 - [x] Tool Result、Stop、新 Turn 并发到达时按会话顺序处理。
