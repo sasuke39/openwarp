@@ -161,8 +161,11 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 	switch call.Name {
 	case agentruntime.ToolWorkspaceShell:
 		var args struct {
-			Command string `json:"command"`
-			Workdir string `json:"workdir"`
+			Command         string `json:"command"`
+			Workdir         string `json:"workdir"`
+			ExecutionMode   string `json:"executionMode"`
+			ExecutionModeV1 string `json:"execution_mode"`
+			RunInBackground *bool  `json:"run_in_background"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return llm.ToolCall{}, fmt.Errorf("decode external bash call: %w", err)
@@ -171,8 +174,32 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 		if strings.TrimSpace(args.Workdir) != "" {
 			command = "cd -- " + shellQuote(args.Workdir) + " && " + command
 		}
+		executionMode := strings.TrimSpace(args.ExecutionMode)
+		if executionMode == "" {
+			executionMode = strings.TrimSpace(args.ExecutionModeV1)
+		}
+		if executionMode == "" && args.RunInBackground != nil {
+			if *args.RunInBackground {
+				executionMode = "background"
+			} else {
+				executionMode = "foreground"
+			}
+		}
+		if executionMode == "" {
+			executionMode = "auto"
+		}
+		var waitUntilComplete bool
+		switch executionMode {
+		case "foreground":
+			waitUntilComplete = true
+		case "auto", "background":
+			waitUntilComplete = false
+		default:
+			return llm.ToolCall{}, fmt.Errorf("unsupported workspace.shell execution mode %q", executionMode)
+		}
 		return marshal("run_shell_command", map[string]any{
 			"command": command, "is_read_only": false, "is_risky": false, "risk_category": "",
+			"wait_until_complete": waitUntilComplete,
 		})
 	case agentruntime.ToolWorkspaceReadFile:
 		var args struct {

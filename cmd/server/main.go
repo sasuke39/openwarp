@@ -1825,10 +1825,11 @@ func (s *Server) sendToolCalls(w io.Writer, flusher http.Flusher, conv *Conversa
 
 		case "run_shell_command":
 			var args struct {
-				Command      string `json:"command"`
-				IsReadOnly   bool   `json:"is_read_only"`
-				IsRisky      bool   `json:"is_risky"`
-				RiskCategory string `json:"risk_category"`
+				Command           string `json:"command"`
+				IsReadOnly        bool   `json:"is_read_only"`
+				IsRisky           bool   `json:"is_risky"`
+				RiskCategory      string `json:"risk_category"`
+				WaitUntilComplete *bool  `json:"wait_until_complete"`
 			}
 			json.Unmarshal(tc.Args, &args)
 			if strings.TrimSpace(args.Command) == "wait" && conv.LastLongRunningCommandID != "" {
@@ -1842,13 +1843,19 @@ func (s *Server) sendToolCalls(w io.Writer, flusher http.Flusher, conv *Conversa
 				}
 				break
 			}
+			runShellCommand := &pb.Message_ToolCall_RunShellCommand{
+				Command:      args.Command,
+				IsReadOnly:   args.IsReadOnly,
+				IsRisky:      args.IsRisky,
+				RiskCategory: parseRiskCategory(args.RiskCategory),
+			}
+			if args.WaitUntilComplete != nil {
+				runShellCommand.WaitUntilCompleteValue = &pb.Message_ToolCall_RunShellCommand_WaitUntilComplete{
+					WaitUntilComplete: *args.WaitUntilComplete,
+				}
+			}
 			tcMsg.Tool = &pb.Message_ToolCall_RunShellCommand_{
-				RunShellCommand: &pb.Message_ToolCall_RunShellCommand{
-					Command:      args.Command,
-					IsReadOnly:   args.IsReadOnly,
-					IsRisky:      args.IsRisky,
-					RiskCategory: parseRiskCategory(args.RiskCategory),
-				},
+				RunShellCommand: runShellCommand,
 			}
 
 		case "read_shell_command_output":

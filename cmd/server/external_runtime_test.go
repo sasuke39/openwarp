@@ -59,6 +59,50 @@ func TestTranslateExternalToolCallRejectsUnknownTool(t *testing.T) {
 	}
 }
 
+func TestTranslateExternalShellExecutionModes(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		wait bool
+	}{
+		{name: "default auto", args: `{"command":"sleep 30"}`, wait: false},
+		{name: "auto", args: `{"command":"sleep 30","executionMode":"auto"}`, wait: false},
+		{name: "background", args: `{"command":"sleep 30","executionMode":"background"}`, wait: false},
+		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: true},
+		{name: "dsh legacy background", args: `{"command":"sleep 30","run_in_background":true}`, wait: false},
+		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			translated, err := translateExternalToolCall(agentruntime.ToolCall{
+				ID: "call-1", Name: agentruntime.ToolWorkspaceShell, Arguments: json.RawMessage(test.args),
+			}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var args struct {
+				WaitUntilComplete *bool `json:"wait_until_complete"`
+			}
+			if err := json.Unmarshal(translated.Args, &args); err != nil {
+				t.Fatal(err)
+			}
+			if args.WaitUntilComplete == nil || *args.WaitUntilComplete != test.wait {
+				t.Fatalf("wait_until_complete = %v, want %v", args.WaitUntilComplete, test.wait)
+			}
+		})
+	}
+}
+
+func TestTranslateExternalShellRejectsUnknownExecutionMode(t *testing.T) {
+	_, err := translateExternalToolCall(agentruntime.ToolCall{
+		ID: "call-1", Name: agentruntime.ToolWorkspaceShell,
+		Arguments: json.RawMessage(`{"command":"pwd","executionMode":"eventually"}`),
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "unsupported workspace.shell execution mode") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestTranslateExternalReadUsesShellInManagedSSH(t *testing.T) {
 	translated, err := translateExternalToolCall(agentruntime.ToolCall{
 		ID: "read-1", Name: agentruntime.ToolWorkspaceReadFile,
