@@ -332,6 +332,9 @@ function positiveInteger(raw: string | undefined): number | undefined {
 function workspaceToolName(dshName: string): string {
   const names: Record<string, string> = {
     bash: 'workspace.shell',
+    bash_output: 'workspace.process.read',
+    bash_write: 'workspace.process.write',
+    bash_cancel: 'workspace.process.cancel',
     read: 'workspace.read_file',
     write: 'workspace.write_file',
     edit: 'workspace.edit_file',

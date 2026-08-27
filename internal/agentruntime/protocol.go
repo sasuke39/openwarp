@@ -41,12 +41,15 @@ type ToolCall struct {
 }
 
 const (
-	ToolWorkspaceShell     = "workspace.shell"
-	ToolWorkspaceReadFile  = "workspace.read_file"
-	ToolWorkspaceWriteFile = "workspace.write_file"
-	ToolWorkspaceEditFile  = "workspace.edit_file"
-	ToolWorkspaceGlob      = "workspace.glob"
-	ToolWorkspaceGrep      = "workspace.grep"
+	ToolWorkspaceShell         = "workspace.shell"
+	ToolWorkspaceReadFile      = "workspace.read_file"
+	ToolWorkspaceWriteFile     = "workspace.write_file"
+	ToolWorkspaceEditFile      = "workspace.edit_file"
+	ToolWorkspaceGlob          = "workspace.glob"
+	ToolWorkspaceGrep          = "workspace.grep"
+	ToolWorkspaceProcessRead   = "workspace.process.read"
+	ToolWorkspaceProcessWrite  = "workspace.process.write"
+	ToolWorkspaceProcessCancel = "workspace.process.cancel"
 )
 
 type EventType string

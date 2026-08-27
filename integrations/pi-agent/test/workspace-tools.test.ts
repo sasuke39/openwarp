@@ -53,9 +53,11 @@ test('Pi bash normalizes execution mode for workspace.shell', async () => {
 
   const call = events[0]?.tool_calls?.[0]
   assert.equal(call?.name, 'workspace.shell')
-  assert.deepEqual(call?.arguments, {
-    command: './start.sh', workdir: '/srv/app', timeoutMs: 120, executionMode: 'background',
-  })
+  assert.equal(call?.arguments.command, './start.sh')
+  assert.equal(call?.arguments.workdir, '/srv/app')
+  assert.equal(call?.arguments.timeoutMs, 120)
+  assert.equal(call?.arguments.executionMode, 'background')
+  assert.match(String(call?.arguments.commandId), /^[0-9a-f-]{36}$/)
   assert.equal(broker.deliver(call?.id ?? '', 'running'), true)
   await pending
 })

@@ -108,11 +108,43 @@ export function createWorkspaceTools(owner: ToolOwner, broker: WorkspaceToolBrok
           Type.Literal('background'),
         ])),
       }),
-      execute: async (_id, args, signal) => result(await run('workspace.shell', {
-        command: args.command,
-        workdir: owner.workingDir,
-        timeoutMs: args.timeout,
-        executionMode: args.execution_mode ?? 'auto',
+      execute: async (_id, args, signal) => {
+        const executionMode = args.execution_mode ?? 'auto'
+        const arguments_: Record<string, unknown> = {
+          command: args.command,
+          workdir: owner.workingDir,
+          timeoutMs: args.timeout,
+          executionMode,
+        }
+        if (executionMode === 'background') arguments_.commandId = randomUUID()
+        return result(await run('workspace.shell', arguments_, signal))
+      },
+    }),
+    defineTool({
+      name: 'bash_output', label: 'Read background command',
+      promptSnippet: 'Read output and status from a background command by command_id',
+      description: 'Read the latest captured output and running/exit status of a background command.',
+      parameters: Type.Object({ command_id: Type.String() }),
+      execute: async (_id, args, signal) => result(await run('workspace.process.read', {
+        commandId: args.command_id,
+      }, signal)),
+    }),
+    defineTool({
+      name: 'bash_write', label: 'Write to background command',
+      promptSnippet: 'Write bytes to a background command stdin by command_id',
+      description: 'Write text to the standard input of a running background command.',
+      parameters: Type.Object({ command_id: Type.String(), input: Type.String() }),
+      execute: async (_id, args, signal) => result(await run('workspace.process.write', {
+        commandId: args.command_id, input: args.input,
+      }, signal)),
+    }),
+    defineTool({
+      name: 'bash_cancel', label: 'Stop background command',
+      promptSnippet: 'Terminate a background command by command_id',
+      description: 'Terminate a running background command and its child process group.',
+      parameters: Type.Object({ command_id: Type.String() }),
+      execute: async (_id, args, signal) => result(await run('workspace.process.cancel', {
+        commandId: args.command_id,
       }, signal)),
     }),
     defineTool({

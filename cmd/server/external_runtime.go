@@ -14,6 +14,7 @@ import (
 	"github.com/sasuke39/open-warp/internal/agentruntime"
 	"github.com/sasuke39/open-warp/internal/llm"
 	pb "github.com/sasuke39/open-warp/internal/proto"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 func (s *Server) runExternalAgent(
@@ -163,12 +164,16 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 		var args struct {
 			Command         string `json:"command"`
 			Workdir         string `json:"workdir"`
+			CommandID       string `json:"commandId"`
 			ExecutionMode   string `json:"executionMode"`
 			ExecutionModeV1 string `json:"execution_mode"`
 			RunInBackground *bool  `json:"run_in_background"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return llm.ToolCall{}, fmt.Errorf("decode external bash call: %w", err)
+		}
+		if err := validateShellSyntax(args.Command); err != nil {
+			return llm.ToolCall{}, err
 		}
 		command := args.Command
 		if strings.TrimSpace(args.Workdir) != "" {
@@ -190,16 +195,51 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 		}
 		var waitUntilComplete bool
 		switch executionMode {
-		case "foreground":
+		case "auto", "foreground":
 			waitUntilComplete = true
-		case "auto", "background":
-			waitUntilComplete = false
+		case "background":
+			if strings.TrimSpace(args.CommandID) == "" {
+				args.CommandID = uuid.NewString()
+			}
+			if !validBackgroundCommandID(args.CommandID) {
+				return llm.ToolCall{}, fmt.Errorf("background workspace.shell requires a valid UUID commandId")
+			}
+			command = managedBackgroundStartCommand(args.CommandID, command)
+			// The launcher itself is short-lived and runs through the independent
+			// session executor. The managed child continues after this completes.
+			waitUntilComplete = true
 		default:
 			return llm.ToolCall{}, fmt.Errorf("unsupported workspace.shell execution mode %q", executionMode)
 		}
 		return marshal("run_shell_command", map[string]any{
 			"command": command, "is_read_only": false, "is_risky": false, "risk_category": "",
 			"wait_until_complete": waitUntilComplete,
+		})
+	case agentruntime.ToolWorkspaceProcessRead,
+		agentruntime.ToolWorkspaceProcessWrite,
+		agentruntime.ToolWorkspaceProcessCancel:
+		var args struct {
+			CommandID string `json:"commandId"`
+			Input     string `json:"input"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return llm.ToolCall{}, fmt.Errorf("decode external process call: %w", err)
+		}
+		if !validBackgroundCommandID(args.CommandID) {
+			return llm.ToolCall{}, fmt.Errorf("external process tool requires a valid commandId")
+		}
+		var command string
+		switch call.Name {
+		case agentruntime.ToolWorkspaceProcessRead:
+			command = managedBackgroundReadCommand(args.CommandID)
+		case agentruntime.ToolWorkspaceProcessWrite:
+			command = managedBackgroundWriteCommand(args.CommandID, args.Input)
+		case agentruntime.ToolWorkspaceProcessCancel:
+			command = managedBackgroundCancelCommand(args.CommandID)
+		}
+		return marshal("run_shell_command", map[string]any{
+			"command": command, "is_read_only": call.Name == agentruntime.ToolWorkspaceProcessRead,
+			"is_risky": false, "risk_category": "", "wait_until_complete": true,
 		})
 	case agentruntime.ToolWorkspaceReadFile:
 		var args struct {
@@ -272,6 +312,64 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 	default:
 		return llm.ToolCall{}, fmt.Errorf("external workspace tool %q has no Warp mapping", call.Name)
 	}
+}
+
+func validateShellSyntax(command string) error {
+	if strings.TrimSpace(command) == "" {
+		return fmt.Errorf("workspace.shell command must not be empty")
+	}
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
+	if _, err := parser.Parse(strings.NewReader(command), "agent-command"); err != nil {
+		return fmt.Errorf("workspace.shell command has incomplete or invalid Bash syntax: %w", err)
+	}
+	return nil
+}
+
+func validBackgroundCommandID(commandID string) bool {
+	_, err := uuid.Parse(commandID)
+	return err == nil
+}
+
+func managedBackgroundJobDir(commandID string) string {
+	return "/tmp/warplocal-agent-jobs/" + commandID
+}
+
+func managedBackgroundStartCommand(commandID, command string) string {
+	dir := managedBackgroundJobDir(commandID)
+	// Opening the FIFO read/write avoids blocking command startup before the
+	// first input arrives, while still allowing later process.write calls.
+	worker := `exec 3<>"$1"; bash -lc "$2" <&3; code=$?; printf '%s\n' "$code" > "$3"`
+	return "job_dir=" + shellQuote(dir) +
+		"; mkdir -p \"$job_dir\"; rm -f \"$job_dir/input\" \"$job_dir/exit\"; mkfifo \"$job_dir/input\"; " +
+		"if command -v setsid >/dev/null 2>&1; then nohup setsid sh -c " + shellQuote(worker) +
+		" sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; " +
+		"else nohup sh -c " + shellQuote(worker) + " sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; fi " +
+		">\"$job_dir/output\" 2>&1 </dev/null & pid=$!; printf '%s\n' \"$pid\" > \"$job_dir/pid\"; " +
+		"printf 'command_id=%s pid=%s status=running\\n' " + shellQuote(commandID) + " \"$pid\""
+}
+
+func managedBackgroundReadCommand(commandID string) string {
+	dir := managedBackgroundJobDir(commandID)
+	return "job_dir=" + shellQuote(dir) +
+		"; test -r \"$job_dir/pid\" || { echo 'unknown command_id'; exit 1; }; pid=$(cat \"$job_dir/pid\"); " +
+		"if kill -0 \"$pid\" 2>/dev/null; then status=running; elif test -r \"$job_dir/exit\"; then status=exited:$(cat \"$job_dir/exit\"); else status=stopped; fi; " +
+		"printf 'command_id=%s pid=%s status=%s\\n' " + shellQuote(commandID) + " \"$pid\" \"$status\"; tail -c 65536 \"$job_dir/output\" 2>/dev/null || true"
+}
+
+func managedBackgroundWriteCommand(commandID, input string) string {
+	dir := managedBackgroundJobDir(commandID)
+	return "job_dir=" + shellQuote(dir) +
+		"; test -r \"$job_dir/pid\" || { echo 'unknown command_id'; exit 1; }; pid=$(cat \"$job_dir/pid\"); " +
+		"kill -0 \"$pid\" 2>/dev/null || { echo 'command is not running'; exit 1; }; " +
+		"printf '%s' " + shellQuote(input) + " > \"$job_dir/input\"; echo 'input delivered'"
+}
+
+func managedBackgroundCancelCommand(commandID string) string {
+	dir := managedBackgroundJobDir(commandID)
+	return "job_dir=" + shellQuote(dir) +
+		"; test -r \"$job_dir/pid\" || { echo 'unknown command_id'; exit 1; }; pid=$(cat \"$job_dir/pid\"); " +
+		"kill -TERM -- -\"$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; " +
+		"sleep 1; kill -0 \"$pid\" 2>/dev/null && { kill -KILL -- -\"$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true; }; echo 'command cancelled'"
 }
 
 func externalRuntimeWorkingDir(input *pb.InputContext) string {

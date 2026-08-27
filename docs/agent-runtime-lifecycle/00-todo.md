@@ -27,11 +27,21 @@
 - [x] 工具运行期间暂存 Steer，在下一 exchange/LLM 安全边界注入。
 - [x] 本阶段不取消 PTY、SSH 命令，不实现 `tool.cancel`。
 
+## 命令执行通道
+
+- [x] `auto/foreground` 等待命令真实退出，不按运行时长猜测后台任务。
+- [x] `background` 必须由框架显式选择，并创建独立 SSH 执行通道。
+- [x] 后台命令返回 `command_id`，支持读取输出、写入 stdin 和终止进程组。
+- [x] 后台命令不占用用户可见 PTY，后续普通命令可继续执行。
+- [x] 使用 Bash AST 在执行前拒绝未闭合 heredoc、引号和语法错误。
+- [ ] App 将后台任务状态展示为可展开 Block，并提供停止入口。
+
 ## 框架边界与恢复
 
 - [ ] Native、Pi、DSH 映射相同的上层生命周期和终态。
 - [ ] App 改用 DSH 支持的 Node 22.19 或 24+，替换当前 Node 23.6。
 - [x] Compaction 继续由当前框架负责，不进入客户端核心状态机。
+- [x] Pi 压缩预算随上下文窗口调整；长度终止必须释放 Turn。
 - [x] 保持现有 Pi/DSH 临时 Session 目录，不迁移存储位置。
 - [ ] Sidecar 重启恢复已完成历史；未完成 Turn 标记中断/取消后允许继续。
 

@@ -18,3 +18,12 @@ test('DSH bash defaults to auto and preserves explicit foreground execution', ()
     command: 'make', executionMode: 'foreground',
   })
 })
+
+test('DSH process tools normalize command ids', () => {
+  assert.deepEqual(workspaceToolArguments('bash_output', { command_id: 'job-1' }), {
+    commandId: 'job-1',
+  })
+  assert.deepEqual(workspaceToolArguments('bash_write', { command_id: 'job-1', input: 'yes\n' }), {
+    commandId: 'job-1', input: 'yes\n',
+  })
+})

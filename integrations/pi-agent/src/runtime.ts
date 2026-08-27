@@ -167,7 +167,10 @@ export class PiAgentRuntime {
     await mkdir(sessionDir, { recursive: true })
 
     const settings = SettingsManager.inMemory({
-      compaction: { enabled: true },
+      compaction: deriveCompactionSettings(
+        positiveInteger(process.env.AGENT_RUNTIME_CONTEXT_WINDOW) ?? 128000,
+        positiveInteger(process.env.AGENT_RUNTIME_MAX_TOKENS) ?? 16384,
+      ),
       retry: { enabled: true, maxRetries: positiveInteger(process.env.PI_MAX_RETRIES) ?? 3 },
     })
     const enableExtensions = process.env.PI_ENABLE_EXTENSIONS === 'true'
@@ -317,9 +320,25 @@ function lastAssistantFailure(messages: readonly unknown[]): string | undefined 
     if (assistant.stopReason === 'error' || assistant.stopReason === 'aborted') {
       return typeof assistant.errorMessage === 'string' ? assistant.errorMessage : `Pi stopped with ${assistant.stopReason}`
     }
+    if (assistant.stopReason === 'length') {
+      return 'Pi reached the model output/context limit after compaction recovery; the turn was released and a new turn may be started'
+    }
     return undefined
   }
   return undefined
+}
+
+export function deriveCompactionSettings(contextWindow: number, maxOutputTokens: number): {
+  enabled: true
+  reserveTokens: number
+  keepRecentTokens: number
+} {
+  // Pi's defaults (16k reserve + 20k recent history) cannot produce a legal
+  // compaction plan for a 32k model. Keep both budgets proportional on small
+  // windows, while retaining Pi's defaults for large-context models.
+  const reserveTokens = Math.min(16384, maxOutputTokens, Math.max(2048, Math.floor(contextWindow / 4)))
+  const keepRecentTokens = Math.min(20000, Math.max(2048, Math.floor(contextWindow / 4)))
+  return { enabled: true, reserveTokens, keepRecentTokens }
 }
 
 function requiredEnv(name: string): string {

@@ -58,6 +58,24 @@ export function apply(ctx: Context, config: Config): void {
       },
     },
     {
+      name: 'bash_output',
+      description: 'Read captured output and status from a background bash command.',
+      parameters: { command_id: { type: 'string', required: true } },
+    },
+    {
+      name: 'bash_write',
+      description: 'Write text to the standard input of a running background bash command.',
+      parameters: {
+        command_id: { type: 'string', required: true },
+        input: { type: 'string', required: true },
+      },
+    },
+    {
+      name: 'bash_cancel',
+      description: 'Terminate a background bash command and its child process group.',
+      parameters: { command_id: { type: 'string', required: true } },
+    },
+    {
       name: 'read',
       description: 'Read a UTF-8 file from the active Warp terminal workspace.',
       parameters: {
