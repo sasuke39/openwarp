@@ -125,6 +125,43 @@ func TestSendToolCallsPreservesOriginalShellCommandForDisplay(t *testing.T) {
 	}
 }
 
+func TestSendToolCallsForwardsWaitUntilComplete(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		wait bool
+	}{
+		{name: "monitored", wait: false},
+		{name: "foreground", wait: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			args, err := json.Marshal(map[string]any{
+				"command": "sleep 30", "wait_until_complete": test.wait,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := (&Server{}).sendToolCalls(
+				recorder, recorder, &Conversation{}, "task-1",
+				[]llm.ToolCall{{ID: "call-1", Name: "run_shell_command", Args: args}},
+			); err != nil {
+				t.Fatal(err)
+			}
+			toolCalls := collectForwardedToolCalls(t, decodeResponseEvents(t, recorder.Body.String()))
+			if len(toolCalls) != 1 {
+				t.Fatalf("expected one forwarded tool call, got %d", len(toolCalls))
+			}
+			run := toolCalls[0].GetRunShellCommand()
+			if run.GetWaitUntilCompleteValue() == nil {
+				t.Fatal("wait_until_complete presence was lost")
+			}
+			if got := run.GetWaitUntilComplete(); got != test.wait {
+				t.Fatalf("wait_until_complete = %v, want %v", got, test.wait)
+			}
+		})
+	}
+}
+
 func TestNormalizeConversationHistory_PrunesDanglingAssistantToolCallBeforeUserQuery(t *testing.T) {
 	history := []openai.ChatCompletionMessageParamUnion{
 		llm.MakeUserMessage("A"),

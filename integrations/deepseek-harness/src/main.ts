@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import { DeepSeekHarness, type HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
 import { envelope, parseEnvelope, type ExternalToolCall, type TurnRequest } from './protocol.js'
+import { workspaceToolArguments } from './workspace-tool-arguments.js'
 
 assertSupportedNode()
 
@@ -267,7 +268,11 @@ function attachToolSocket(socket: Socket): void {
       for (const call of message.calls) callOwners.set(call.id, socket)
       writeEvent(state.exchangeId, {
         type: 'tool.call.batch',
-        tool_calls: message.calls.map(call => ({ id: call.id, name: workspaceToolName(call.name), arguments: call.arguments })),
+        tool_calls: message.calls.map(call => ({
+          id: call.id,
+          name: workspaceToolName(call.name),
+          arguments: workspaceToolArguments(call.name, call.arguments),
+        })),
       })
       writeEvent(state.exchangeId, { type: 'turn.awaiting_tool' })
     }

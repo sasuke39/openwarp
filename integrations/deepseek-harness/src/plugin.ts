@@ -48,7 +48,7 @@ export function apply(ctx: Context, config: Config): void {
   const definitions: Array<{ name: string; description: string; parameters: ParameterSchemaSpec }> = [
     {
       name: 'bash',
-      description: 'Execute a command in the active Warp terminal. This may be a local or SSH terminal.',
+      description: 'Execute a command in the active Warp terminal. This may be a local or SSH terminal. Set run_in_background for servers and other commands that are expected to keep running.',
       parameters: {
         command: { type: 'string', required: true },
         description: { type: 'string', required: true },
