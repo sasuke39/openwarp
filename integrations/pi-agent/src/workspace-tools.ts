@@ -98,21 +98,52 @@ export function createWorkspaceTools(owner: ToolOwner, broker: WorkspaceToolBrok
   return [
     defineTool({
       name: 'bash', label: 'Bash', promptSnippet: 'Execute shell commands in the active Warp terminal',
-      description: 'Execute a shell command in the active Warp terminal, which may be local or SSH. Use background for servers and other commands that are expected to keep running; use foreground only when the command must finish before continuing.',
+      description: 'Execute a shell command in the active Warp terminal, which may be local or SSH. You must explicitly choose foreground for commands that should finish before continuing, or background for servers and other persistent commands.',
       parameters: Type.Object({
         command: Type.String(),
         timeout: Type.Optional(Type.Number()),
-        execution_mode: Type.Optional(Type.Union([
-          Type.Literal('auto'),
+        execution_mode: Type.Union([
           Type.Literal('foreground'),
           Type.Literal('background'),
-        ])),
+        ]),
       }),
-      execute: async (_id, args, signal) => result(await run('workspace.shell', {
-        command: args.command,
-        workdir: owner.workingDir,
-        timeoutMs: args.timeout,
-        executionMode: args.execution_mode ?? 'auto',
+      execute: async (_id, args, signal) => {
+        const executionMode = args.execution_mode
+        const arguments_: Record<string, unknown> = {
+          command: args.command,
+          workdir: owner.workingDir,
+          timeoutMs: args.timeout,
+          executionMode,
+        }
+        if (executionMode === 'background') arguments_.commandId = randomUUID()
+        return result(await run('workspace.shell', arguments_, signal))
+      },
+    }),
+    defineTool({
+      name: 'bash_output', label: 'Read background command',
+      promptSnippet: 'Read output and status from a background command by command_id',
+      description: 'Read the latest captured output and running/exit status of a background command.',
+      parameters: Type.Object({ command_id: Type.String() }),
+      execute: async (_id, args, signal) => result(await run('workspace.process.read', {
+        commandId: args.command_id,
+      }, signal)),
+    }),
+    defineTool({
+      name: 'bash_write', label: 'Write to background command',
+      promptSnippet: 'Write bytes to a background command stdin by command_id',
+      description: 'Write text to the standard input of a running background command.',
+      parameters: Type.Object({ command_id: Type.String(), input: Type.String() }),
+      execute: async (_id, args, signal) => result(await run('workspace.process.write', {
+        commandId: args.command_id, input: args.input,
+      }, signal)),
+    }),
+    defineTool({
+      name: 'bash_cancel', label: 'Stop background command',
+      promptSnippet: 'Terminate a background command by command_id',
+      description: 'Terminate a running background command and its child process group.',
+      parameters: Type.Object({ command_id: Type.String() }),
+      execute: async (_id, args, signal) => result(await run('workspace.process.cancel', {
+        commandId: args.command_id,
       }, signal)),
     }),
     defineTool({
@@ -169,6 +200,7 @@ export function createWorkspaceTools(owner: ToolOwner, broker: WorkspaceToolBrok
       parameters: Type.Object({ path: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
       execute: async (_id, args, signal) => result(await run('workspace.shell', {
         command: `ls -la -- ${shellQuote(args.path ?? '.')}`, workdir: owner.workingDir,
+        executionMode: 'foreground',
       }, signal)),
     }),
   ]

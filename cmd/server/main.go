@@ -272,6 +272,7 @@ func main() {
 	mux.HandleFunc("/settings/profiles/{name}", server.handleProfile)
 	mux.HandleFunc("/settings/profiles/{name}/activate", server.handleProfileActivate)
 	mux.HandleFunc("POST /agent/tasks/{task_id}/cancel", server.handleCancelTask)
+	mux.HandleFunc("POST /agent/tasks/{task_id}/steer", server.handleSteerTask)
 	mux.HandleFunc("/settings/memory/status", server.handleMemoryStatus)
 	mux.HandleFunc("POST /settings/memory/clear-session", server.handleMemoryClearSession)
 	mux.HandleFunc("POST /settings/memory/clear-project", server.handleMemoryClearProject)
@@ -489,6 +490,74 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 			fn()
 		}
 	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode("ok")
+}
+
+type steerTaskRequest struct {
+	ConversationID string `json:"conversation_id"`
+	Prompt         string `json:"prompt"`
+}
+
+// handleSteerTask injects guidance into an active framework Turn without
+// creating a second Warp response stream. Pi applies the message before its
+// next model exchange; the currently running tool is not cancelled.
+func (s *Server) handleSteerTask(w http.ResponseWriter, r *http.Request) {
+	taskID := strings.TrimSpace(r.PathValue("task_id"))
+	if taskID == "" {
+		http.Error(w, "missing task_id", http.StatusBadRequest)
+		return
+	}
+	var request steerTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid steer request", http.StatusBadRequest)
+		return
+	}
+	request.ConversationID = strings.TrimSpace(request.ConversationID)
+	request.Prompt = strings.TrimSpace(request.Prompt)
+	if request.ConversationID == "" || request.Prompt == "" {
+		http.Error(w, "conversation_id and prompt are required", http.StatusBadRequest)
+		return
+	}
+
+	value, ok := s.externalTasks.Load(taskID)
+	if !ok {
+		http.Error(w, "agent turn is no longer active", http.StatusConflict)
+		return
+	}
+	driver, ok := value.(agentruntime.Driver)
+	if !ok {
+		http.Error(w, "agent runtime is unavailable", http.StatusConflict)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	steered := false
+	err := driver.Exchange(ctx, agentruntime.TurnRequest{
+		ConversationID: request.ConversationID,
+		TaskID:         taskID,
+		RequestID:      uuid.NewString(),
+		Inputs: []agentruntime.Input{{
+			Kind:    agentruntime.InputUserSteer,
+			Content: request.Prompt,
+		}},
+	}, func(event agentruntime.Event) error {
+		if event.Type == agentruntime.EventTurnSteered {
+			steered = true
+		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("[RUNTIME:%s] steer task %s: %v", driver.Name(), taskID, err)
+		http.Error(w, "failed to steer active agent turn", http.StatusBadGateway)
+		return
+	}
+	if !steered {
+		http.Error(w, "agent runtime did not acknowledge steer", http.StatusBadGateway)
+		return
+	}
+	log.Printf("[RUNTIME:%s] queued steer task=%s conversation=%s", driver.Name(), taskID, request.ConversationID)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode("ok")
 }

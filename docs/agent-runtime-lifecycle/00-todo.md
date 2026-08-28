@@ -24,19 +24,33 @@
 ## Steer 第一阶段
 
 - [x] 增加 `user.steer` 输入，不创建新 Turn。
+- [x] Agent 运行中提交默认显示为排队中的 Follow-up，不直接开启响应流。
+- [x] 只有点击排队块按钮才转为 Steer，并走独立控制接口。
 - [x] 工具运行期间暂存 Steer，在下一 exchange/LLM 安全边界注入。
 - [x] 本阶段不取消 PTY、SSH 命令，不实现 `tool.cancel`。
+
+## 命令执行通道
+
+- [x] 删除 `auto`；框架必须显式选择 `foreground` 或 `background`。
+- [x] `background` 创建独立逻辑进程通道，`foreground` 留在当前终端等待。
+- [x] 后台命令返回 `command_id`，支持读取输出、写入 stdin 和终止进程组。
+- [x] 后台命令不占用用户可见 PTY，后续普通命令可继续执行。
+- [x] 使用 Bash AST 在执行前拒绝未闭合 heredoc、引号和语法错误。
+- [ ] App 将后台任务状态展示为可展开 Block，并提供停止入口。
 
 ## 框架边界与恢复
 
 - [ ] Native、Pi、DSH 映射相同的上层生命周期和终态。
 - [ ] App 改用 DSH 支持的 Node 22.19 或 24+，替换当前 Node 23.6。
 - [x] Compaction 继续由当前框架负责，不进入客户端核心状态机。
+- [x] Pi 压缩预算随上下文窗口调整；长度终止必须释放 Turn。
 - [x] 保持现有 Pi/DSH 临时 Session 目录，不迁移存储位置。
 - [ ] Sidecar 重启恢复已完成历史；未完成 Turn 标记中断/取消后允许继续。
 
 ## 验收
 
+- [x] 模拟终端全链路覆盖后台启动、并行主 PTY、读取、终止及同会话下一 Turn。
+- [x] 本机真实 OpenSSH 回环测试覆盖持久 PTY、独立连接、stdin、读取和取消。
 - [ ] 生成、等待工具、工具拒绝阶段均可 Stop，重复 Stop 无副作用。
 - [x] Stop/Reject 后同一 Conversation 可立即开启下一 Turn。
 - [x] Tool Result、Stop、新 Turn 并发到达时按会话顺序处理。

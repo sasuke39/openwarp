@@ -10,11 +10,21 @@ test('DSH bash normalizes explicit background execution', () => {
   })
 })
 
-test('DSH bash defaults to auto and preserves explicit foreground execution', () => {
-  assert.deepEqual(workspaceToolArguments('bash', { command: 'pwd' }), {
-    command: 'pwd', executionMode: 'auto',
-  })
+test('DSH bash requires an explicit execution mode', () => {
+  assert.throws(
+    () => workspaceToolArguments('bash', { command: 'pwd' }),
+    /explicitly select foreground or background/,
+  )
   assert.deepEqual(workspaceToolArguments('bash', { command: 'make', run_in_background: false }), {
     command: 'make', executionMode: 'foreground',
+  })
+})
+
+test('DSH process tools normalize command ids', () => {
+  assert.deepEqual(workspaceToolArguments('bash_output', { command_id: 'job-1' }), {
+    commandId: 'job-1',
+  })
+  assert.deepEqual(workspaceToolArguments('bash_write', { command_id: 'job-1', input: 'yes\n' }), {
+    commandId: 'job-1', input: 'yes\n',
   })
 })

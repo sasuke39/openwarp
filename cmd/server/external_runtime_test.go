@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/sasuke39/open-warp/internal/agentruntime"
 	"github.com/sasuke39/open-warp/internal/config"
 	"github.com/sasuke39/open-warp/internal/llm"
@@ -27,7 +31,7 @@ func TestTranslateExternalToolCall(t *testing.T) {
 		wantTool string
 		contains string
 	}{
-		{"bash", agentruntime.ToolWorkspaceShell, `{"command":"pwd","workdir":"/tmp/a b"}`, "run_shell_command", `/tmp/a b`},
+		{"bash", agentruntime.ToolWorkspaceShell, `{"command":"pwd","workdir":"/tmp/a b","executionMode":"foreground"}`, "run_shell_command", `/tmp/a b`},
 		{"read", agentruntime.ToolWorkspaceReadFile, `{"file_path":"main.go","offset":5,"limit":10}`, "read_files", `"end":14`},
 		{"write", agentruntime.ToolWorkspaceWriteFile, `{"file_path":"new.txt","content":"hello"}`, "apply_file_diffs", `"new_files"`},
 		{"edit", agentruntime.ToolWorkspaceEditFile, `{"file_path":"main.go","old_string":"a","new_string":"b"}`, "apply_file_diffs", `"search":"a"`},
@@ -65,12 +69,10 @@ func TestTranslateExternalShellExecutionModes(t *testing.T) {
 		args string
 		wait bool
 	}{
-		{name: "default auto", args: `{"command":"sleep 30"}`, wait: false},
-		{name: "auto", args: `{"command":"sleep 30","executionMode":"auto"}`, wait: false},
-		{name: "background", args: `{"command":"sleep 30","executionMode":"background"}`, wait: false},
-		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: true},
-		{name: "dsh legacy background", args: `{"command":"sleep 30","run_in_background":true}`, wait: false},
-		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: true},
+		{name: "background", args: `{"command":"sleep 30","executionMode":"background"}`, wait: true},
+		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: false},
+		{name: "dsh legacy background", args: `{"command":"sleep 30","run_in_background":true}`, wait: true},
+		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -93,6 +95,20 @@ func TestTranslateExternalShellExecutionModes(t *testing.T) {
 	}
 }
 
+func TestTranslateExternalShellRequiresExplicitExecutionMode(t *testing.T) {
+	for _, args := range []string{
+		`{"command":"pwd"}`,
+		`{"command":"pwd","executionMode":"auto"}`,
+	} {
+		_, err := translateExternalToolCall(agentruntime.ToolCall{
+			ID: "call-1", Name: agentruntime.ToolWorkspaceShell, Arguments: json.RawMessage(args),
+		}, false)
+		if err == nil {
+			t.Fatalf("expected explicit execution mode error for %s", args)
+		}
+	}
+}
+
 func TestTranslateExternalShellRejectsUnknownExecutionMode(t *testing.T) {
 	_, err := translateExternalToolCall(agentruntime.ToolCall{
 		ID: "call-1", Name: agentruntime.ToolWorkspaceShell,
@@ -100,6 +116,140 @@ func TestTranslateExternalShellRejectsUnknownExecutionMode(t *testing.T) {
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), "unsupported workspace.shell execution mode") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestTranslateExternalShellRejectsIncompleteSyntax(t *testing.T) {
+	_, err := translateExternalToolCall(agentruntime.ToolCall{
+		ID: "call-incomplete", Name: agentruntime.ToolWorkspaceShell,
+		Arguments: json.RawMessage(`{"command":"cat <<'EOF'\nmissing terminator","executionMode":"foreground"}`),
+	}, true)
+	if err == nil || !strings.Contains(err.Error(), "incomplete or invalid Bash syntax") {
+		t.Fatalf("expected an actionable syntax error, got %v", err)
+	}
+}
+
+func TestTranslateExternalBackgroundShellCreatesManagedJob(t *testing.T) {
+	translated, err := translateExternalToolCall(agentruntime.ToolCall{
+		ID: "background-1", Name: agentruntime.ToolWorkspaceShell,
+		Arguments: json.RawMessage(`{"command":"./start.sh","executionMode":"background","commandId":"11111111-2222-4333-8444-555555555555"}`),
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args struct {
+		Command           string `json:"command"`
+		WaitUntilComplete bool   `json:"wait_until_complete"`
+	}
+	if err := json.Unmarshal(translated.Args, &args); err != nil {
+		t.Fatal(err)
+	}
+	if !args.WaitUntilComplete {
+		t.Fatal("background launcher must use the independent session executor")
+	}
+	if !strings.Contains(args.Command, "/tmp/warplocal-agent-jobs/11111111-2222-4333-8444-555555555555") ||
+		!strings.Contains(args.Command, "status=running") {
+		t.Fatalf("managed background launcher = %s", args.Command)
+	}
+	if err := validateShellSyntax(args.Command); err != nil {
+		t.Fatalf("generated launcher must be valid Bash: %v\n%s", err, args.Command)
+	}
+}
+
+func TestTranslateExternalProcessTools(t *testing.T) {
+	const commandID = "11111111-2222-4333-8444-555555555555"
+	tests := []struct {
+		name     string
+		tool     string
+		args     string
+		contains string
+	}{
+		{"read", agentruntime.ToolWorkspaceProcessRead, `{"commandId":"` + commandID + `"}`, "tail -c 65536"},
+		{"write", agentruntime.ToolWorkspaceProcessWrite, `{"commandId":"` + commandID + `","input":"yes\\n"}`, "input delivered"},
+		{"cancel", agentruntime.ToolWorkspaceProcessCancel, `{"commandId":"` + commandID + `"}`, "kill -TERM"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			translated, err := translateExternalToolCall(agentruntime.ToolCall{
+				ID: "process-1", Name: test.tool, Arguments: json.RawMessage(test.args),
+			}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var args struct {
+				Command           string `json:"command"`
+				WaitUntilComplete bool   `json:"wait_until_complete"`
+			}
+			if err := json.Unmarshal(translated.Args, &args); err != nil {
+				t.Fatal(err)
+			}
+			if !args.WaitUntilComplete || !strings.Contains(args.Command, test.contains) {
+				t.Fatalf("translated process command = %+v", args)
+			}
+			if err := validateShellSyntax(args.Command); err != nil {
+				t.Fatalf("generated process command must be valid Bash: %v\n%s", err, args.Command)
+			}
+		})
+	}
+}
+
+func TestManagedBackgroundCommandLifecycle(t *testing.T) {
+	commandID := uuid.NewString()
+	t.Cleanup(func() { _ = os.RemoveAll(managedBackgroundJobDir(commandID)) })
+	start := exec.Command("bash", "-lc", managedBackgroundStartCommand(commandID, "printf hello; sleep 0.1; printf world"))
+	output, err := start.CombinedOutput()
+	if err != nil {
+		t.Fatalf("start managed command: %v\n%s", err, output)
+	}
+	if !regexp.MustCompile(`status=running`).Match(output) {
+		t.Fatalf("unexpected start output: %s", output)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		readOutput, readErr := exec.Command("bash", "-lc", managedBackgroundReadCommand(commandID)).CombinedOutput()
+		if readErr != nil {
+			t.Fatalf("read managed command: %v\n%s", readErr, readOutput)
+		}
+		if strings.Contains(string(readOutput), "status=exited:0") {
+			if !strings.Contains(string(readOutput), "helloworld") {
+				t.Fatalf("managed output was not captured: %s", readOutput)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("managed command did not finish: %s", readOutput)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func TestManagedBackgroundCommandAcceptsInput(t *testing.T) {
+	commandID := uuid.NewString()
+	t.Cleanup(func() { _ = os.RemoveAll(managedBackgroundJobDir(commandID)) })
+	if output, err := exec.Command("bash", "-lc", managedBackgroundStartCommand(commandID, `read value; printf 'got:%s' "$value"`)).CombinedOutput(); err != nil {
+		t.Fatalf("start managed command: %v\n%s", err, output)
+	}
+	if output, err := exec.Command("bash", "-lc", managedBackgroundWriteCommand(commandID, "ready\n")).CombinedOutput(); err != nil {
+		t.Fatalf("write managed command: %v\n%s", err, output)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		output, err := exec.Command("bash", "-lc", managedBackgroundReadCommand(commandID)).CombinedOutput()
+		if err != nil {
+			t.Fatalf("read managed command: %v\n%s", err, output)
+		}
+		if strings.Contains(string(output), "status=exited:0") {
+			if !strings.Contains(string(output), "got:ready") {
+				t.Fatalf("managed command did not receive input: %s", output)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("managed command did not finish: %s", output)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
@@ -364,6 +514,54 @@ func TestHandleCancelTaskCancelsSuspendedExternalTurn(t *testing.T) {
 	}
 	if _, ok := server.externalTasks.Load("task-suspended"); ok {
 		t.Fatal("cancelled external task must be removed")
+	}
+}
+
+type steerRecordingDriver struct {
+	request agentruntime.TurnRequest
+}
+
+func (driver *steerRecordingDriver) Name() string { return "steer-recording-runtime" }
+func (driver *steerRecordingDriver) Exchange(_ context.Context, request agentruntime.TurnRequest, emit func(agentruntime.Event) error) error {
+	driver.request = request
+	return emit(agentruntime.Event{Type: agentruntime.EventTurnSteered})
+}
+func (driver *steerRecordingDriver) Cancel(context.Context, string) error { return nil }
+func (driver *steerRecordingDriver) Close(context.Context) error          { return nil }
+
+func TestHandleSteerTaskInjectsGuidanceIntoActiveTurn(t *testing.T) {
+	driver := &steerRecordingDriver{}
+	server := &Server{}
+	server.externalTasks.Store("task-active", agentruntime.Driver(driver))
+	body := bytes.NewBufferString(`{"conversation_id":"conversation-1","prompt":"use the mirror next"}`)
+	request := httptest.NewRequest(http.MethodPost, "/agent/tasks/task-active/steer", body)
+	request.SetPathValue("task_id", "task-active")
+	recorder := httptest.NewRecorder()
+
+	server.handleSteerTask(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("steer status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if driver.request.ConversationID != "conversation-1" || driver.request.TaskID != "task-active" {
+		t.Fatalf("steer request identity = %+v", driver.request)
+	}
+	if len(driver.request.Inputs) != 1 || driver.request.Inputs[0].Kind != agentruntime.InputUserSteer || driver.request.Inputs[0].Content != "use the mirror next" {
+		t.Fatalf("steer inputs = %+v", driver.request.Inputs)
+	}
+}
+
+func TestHandleSteerTaskRejectsInactiveTurn(t *testing.T) {
+	server := &Server{}
+	body := bytes.NewBufferString(`{"conversation_id":"conversation-1","prompt":"continue"}`)
+	request := httptest.NewRequest(http.MethodPost, "/agent/tasks/missing/steer", body)
+	request.SetPathValue("task_id", "missing")
+	recorder := httptest.NewRecorder()
+
+	server.handleSteerTask(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("steer status = %d, want 409", recorder.Code)
 	}
 }
 
