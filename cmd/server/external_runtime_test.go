@@ -70,9 +70,9 @@ func TestTranslateExternalShellExecutionModes(t *testing.T) {
 		wait bool
 	}{
 		{name: "background", args: `{"command":"sleep 30","executionMode":"background"}`, wait: true},
-		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: false},
+		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: true},
 		{name: "dsh legacy background", args: `{"command":"sleep 30","run_in_background":true}`, wait: true},
-		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: false},
+		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -298,8 +298,10 @@ func (externalRuntimeTestDriver) Exchange(_ context.Context, _ agentruntime.Turn
 	}
 	return emit(agentruntime.Event{Type: agentruntime.EventTurnCompleted})
 }
-func (externalRuntimeTestDriver) Cancel(context.Context, string) error { return nil }
-func (externalRuntimeTestDriver) Close(context.Context) error          { return nil }
+func (externalRuntimeTestDriver) Cancel(context.Context, agentruntime.TurnControl) error {
+	return nil
+}
+func (externalRuntimeTestDriver) Close(context.Context) error { return nil }
 
 type recordingExternalRuntimeDriver struct {
 	request agentruntime.TurnRequest
@@ -310,8 +312,10 @@ func (driver *recordingExternalRuntimeDriver) Exchange(_ context.Context, reques
 	driver.request = request
 	return emit(agentruntime.Event{Type: agentruntime.EventTurnCompleted})
 }
-func (driver *recordingExternalRuntimeDriver) Cancel(context.Context, string) error { return nil }
-func (driver *recordingExternalRuntimeDriver) Close(context.Context) error          { return nil }
+func (driver *recordingExternalRuntimeDriver) Cancel(context.Context, agentruntime.TurnControl) error {
+	return nil
+}
+func (driver *recordingExternalRuntimeDriver) Close(context.Context) error { return nil }
 
 func TestRunExternalAgentCreatesTaskBeforeFirstMessage(t *testing.T) {
 	recorder := httptest.NewRecorder()
@@ -319,7 +323,7 @@ func TestRunExternalAgentCreatesTaskBeforeFirstMessage(t *testing.T) {
 
 	if ok, awaiting := server.runExternalAgent(
 		context.Background(), externalRuntimeTestDriver{}, recorder, recorder,
-		&Conversation{}, "conversation-1", "request-1", "task-1", false,
+		&Conversation{}, "conversation-1", "turn-1", "request-1", "task-1", false,
 		[]input{{Kind: "user_query", Content: "hello"}}, nil,
 	); !ok || awaiting {
 		t.Fatal("expected external runtime turn to finish successfully")
@@ -344,7 +348,7 @@ func TestRunExternalAgentDoesNotRecreateExistingTask(t *testing.T) {
 
 	if ok, awaiting := server.runExternalAgent(
 		context.Background(), externalRuntimeTestDriver{}, recorder, recorder,
-		&Conversation{}, "conversation-1", "request-1", "task-1", true,
+		&Conversation{}, "conversation-1", "turn-1", "request-1", "task-1", true,
 		[]input{{Kind: "tool_result", ToolCallID: "call-1", Content: "ok"}}, nil,
 	); !ok || awaiting {
 		t.Fatal("expected external runtime continuation to finish successfully")
@@ -370,7 +374,7 @@ func TestRunExternalAgentCompletesPartialToolBatchBeforeResume(t *testing.T) {
 
 	if ok, awaiting := server.runExternalAgent(
 		context.Background(), driver, recorder, recorder,
-		&Conversation{}, "conversation-1", "request-1", "task-1", true,
+		&Conversation{}, "conversation-1", "turn-1", "request-1", "task-1", true,
 		[]input{{Kind: "tool_result", ToolCallID: "shell-call", Content: "ok"}}, nil,
 	); !ok || awaiting {
 		t.Fatal("expected completed external runtime continuation")
@@ -396,8 +400,8 @@ func (driver *timeoutExternalRuntimeDriver) Exchange(ctx context.Context, _ agen
 	<-ctx.Done()
 	return ctx.Err()
 }
-func (driver *timeoutExternalRuntimeDriver) Cancel(_ context.Context, taskID string) error {
-	driver.cancelled <- taskID
+func (driver *timeoutExternalRuntimeDriver) Cancel(_ context.Context, control agentruntime.TurnControl) error {
+	driver.cancelled <- control.TaskID
 	return nil
 }
 func (driver *timeoutExternalRuntimeDriver) Close(context.Context) error { return nil }
@@ -409,7 +413,7 @@ func TestRunExternalAgentTimesOutAndCancelsFramework(t *testing.T) {
 
 	if ok, active := server.runExternalAgent(
 		context.Background(), driver, recorder, recorder,
-		&Conversation{}, "conversation-1", "request-1", "task-timeout", true,
+		&Conversation{}, "conversation-1", "turn-timeout", "request-1", "task-timeout", true,
 		[]input{{Kind: "user_query", Content: "hello"}}, nil,
 	); ok || active {
 		t.Fatal("timed-out external exchange must fail and become inactive")
@@ -478,23 +482,23 @@ func TestHandleAgentRequestCreatesMissingTaskBeforeExternalOutput(t *testing.T) 
 var _ agentruntime.Driver = externalRuntimeTestDriver{}
 
 type cancelRecordingDriver struct {
-	cancelled chan string
+	cancelled chan agentruntime.TurnControl
 }
 
 func (driver *cancelRecordingDriver) Name() string { return "cancel-recording-runtime" }
 func (driver *cancelRecordingDriver) Exchange(context.Context, agentruntime.TurnRequest, func(agentruntime.Event) error) error {
 	return nil
 }
-func (driver *cancelRecordingDriver) Cancel(_ context.Context, taskID string) error {
-	driver.cancelled <- taskID
+func (driver *cancelRecordingDriver) Cancel(_ context.Context, control agentruntime.TurnControl) error {
+	driver.cancelled <- control
 	return nil
 }
 func (driver *cancelRecordingDriver) Close(context.Context) error { return nil }
 
 func TestHandleCancelTaskCancelsSuspendedExternalTurn(t *testing.T) {
-	driver := &cancelRecordingDriver{cancelled: make(chan string, 1)}
+	driver := &cancelRecordingDriver{cancelled: make(chan agentruntime.TurnControl, 1)}
 	server := &Server{}
-	server.externalTasks.Store("task-suspended", agentruntime.Driver(driver))
+	turn := server.activeTurns.begin("task-suspended", "conversation-1", driver)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/agent/tasks/task-suspended/cancel", nil)
@@ -505,35 +509,62 @@ func TestHandleCancelTaskCancelsSuspendedExternalTurn(t *testing.T) {
 		t.Fatalf("cancel status = %d, want 200", recorder.Code)
 	}
 	select {
-	case taskID := <-driver.cancelled:
-		if taskID != "task-suspended" {
-			t.Fatalf("cancelled task = %q", taskID)
+	case control := <-driver.cancelled:
+		if control.TaskID != "task-suspended" || control.ConversationID != "conversation-1" || control.TurnID != turn.snapshot().TurnID {
+			t.Fatalf("cancelled Turn = %+v", control)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("external runtime was not cancelled")
 	}
-	if _, ok := server.externalTasks.Load("task-suspended"); ok {
-		t.Fatal("cancelled external task must be removed")
+	if _, ok := server.activeTurns.loadByWarpTask("task-suspended"); ok {
+		t.Fatal("cancelled external Turn must be removed")
 	}
 }
 
 type steerRecordingDriver struct {
-	request agentruntime.TurnRequest
+	request   agentruntime.TurnRequest
+	exchanges int
 }
 
 func (driver *steerRecordingDriver) Name() string { return "steer-recording-runtime" }
 func (driver *steerRecordingDriver) Exchange(_ context.Context, request agentruntime.TurnRequest, emit func(agentruntime.Event) error) error {
 	driver.request = request
-	return emit(agentruntime.Event{Type: agentruntime.EventTurnSteered})
+	driver.exchanges++
+	steerID := ""
+	if len(request.Inputs) > 0 {
+		steerID = request.Inputs[0].SteerID
+	}
+	return emit(agentruntime.Event{Type: agentruntime.EventSteerAccepted, SteerID: steerID})
 }
-func (driver *steerRecordingDriver) Cancel(context.Context, string) error { return nil }
-func (driver *steerRecordingDriver) Close(context.Context) error          { return nil }
+
+func TestHandleSteerTaskIsIdempotentBySteerID(t *testing.T) {
+	driver := &steerRecordingDriver{}
+	server := &Server{}
+	server.activeTurns.begin("task-active", "runtime-conversation", driver)
+	body := `{"conversation_id":"ui-conversation","prompt":"use mirror","steer_id":"6e9b5b7f-a80f-4f7f-bb8b-a9328820bd3b"}`
+	for attempt := 0; attempt < 2; attempt++ {
+		request := httptest.NewRequest(http.MethodPost, "/agent/tasks/task-active/steer", bytes.NewBufferString(body))
+		request.SetPathValue("task_id", "task-active")
+		recorder := httptest.NewRecorder()
+		server.handleSteerTask(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("attempt %d status = %d, body = %s", attempt, recorder.Code, recorder.Body.String())
+		}
+	}
+	if driver.exchanges != 1 {
+		t.Fatalf("runtime received %d steer exchanges, want 1", driver.exchanges)
+	}
+}
+func (driver *steerRecordingDriver) Cancel(context.Context, agentruntime.TurnControl) error {
+	return nil
+}
+func (driver *steerRecordingDriver) Close(context.Context) error { return nil }
 
 func TestHandleSteerTaskInjectsGuidanceIntoActiveTurn(t *testing.T) {
 	driver := &steerRecordingDriver{}
 	server := &Server{}
-	server.externalTasks.Store("task-active", agentruntime.Driver(driver))
-	body := bytes.NewBufferString(`{"conversation_id":"conversation-1","prompt":"use the mirror next"}`)
+	turn := server.activeTurns.begin("task-active", "runtime-conversation", driver)
+	body := bytes.NewBufferString(`{"conversation_id":"ui-conversation","prompt":"use the mirror next"}`)
 	request := httptest.NewRequest(http.MethodPost, "/agent/tasks/task-active/steer", body)
 	request.SetPathValue("task_id", "task-active")
 	recorder := httptest.NewRecorder()
@@ -543,11 +574,41 @@ func TestHandleSteerTaskInjectsGuidanceIntoActiveTurn(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("steer status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	if driver.request.ConversationID != "conversation-1" || driver.request.TaskID != "task-active" {
+	if driver.request.ConversationID != "runtime-conversation" || driver.request.TurnID != turn.snapshot().TurnID || driver.request.TaskID != "task-active" {
 		t.Fatalf("steer request identity = %+v", driver.request)
 	}
 	if len(driver.request.Inputs) != 1 || driver.request.Inputs[0].Kind != agentruntime.InputUserSteer || driver.request.Inputs[0].Content != "use the mirror next" {
 		t.Fatalf("steer inputs = %+v", driver.request.Inputs)
+	}
+}
+
+func TestAgentControlRoutesAcceptWarpPublicAPIPrefix(t *testing.T) {
+	for _, path := range []string{
+		"/agent/tasks/task-active/steer",
+		"/api/v1/agent/tasks/task-active/steer",
+	} {
+		t.Run(path, func(t *testing.T) {
+			driver := &steerRecordingDriver{}
+			server := &Server{}
+			server.activeTurns.begin("task-active", "runtime-conversation", driver)
+			mux := http.NewServeMux()
+			registerAgentControlRoutes(mux, server)
+			request := httptest.NewRequest(
+				http.MethodPost,
+				path,
+				bytes.NewBufferString(`{"conversation_id":"conversation-1","prompt":"steer now"}`),
+			)
+			recorder := httptest.NewRecorder()
+
+			mux.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("steer route %s status = %d, body = %s", path, recorder.Code, recorder.Body.String())
+			}
+			if driver.request.TaskID != "task-active" || len(driver.request.Inputs) != 1 || driver.request.Inputs[0].Content != "steer now" {
+				t.Fatalf("steer route %s request = %+v", path, driver.request)
+			}
+		})
 	}
 }
 
@@ -582,8 +643,8 @@ func (driver *blockingExternalDriver) Exchange(ctx context.Context, _ agentrunti
 		return ctx.Err()
 	}
 }
-func (driver *blockingExternalDriver) Cancel(_ context.Context, taskID string) error {
-	driver.cancelled <- taskID
+func (driver *blockingExternalDriver) Cancel(_ context.Context, control agentruntime.TurnControl) error {
+	driver.cancelled <- control.TaskID
 	driver.stopOnce.Do(func() { close(driver.stopped) })
 	return nil
 }

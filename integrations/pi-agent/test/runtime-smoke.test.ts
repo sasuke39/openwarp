@@ -69,7 +69,7 @@ test('Pi runtime suspends for a Warp tool and resumes the SDK session', { timeou
 		if (event.type === 'turn.completed' || event.type === 'turn.failed') finish?.()
   })
   const request: TurnRequest = {
-    conversation_id: 'smoke-conversation', task_id: 'smoke-task', request_id: 'smoke-request',
+    conversation_id: 'smoke-conversation', turn_id: 'smoke-turn', task_id: 'smoke-task', request_id: 'smoke-request',
     working_dir: root, inputs: [{ kind: 'user.message', content: 'Say the smoke-test phrase.' }],
   }
 
@@ -78,12 +78,26 @@ test('Pi runtime suspends for a Warp tool and resumes the SDK session', { timeou
 		await awaitingTool
 		const call = events.find(event => event.type === 'tool.call.batch')?.tool_calls?.[0]
 		assert.equal(call?.name, 'workspace.shell')
+		await assert.rejects(
+			runtime.handle(envelope('exchange-stale-steer', 'turn.steer', {
+				...request,
+				turn_id: 'stale-turn',
+				inputs: [{ kind: 'user.steer', content: 'must not enter the active Turn', steer_id: 'stale-steer' }],
+			})),
+			/stale turn/,
+		)
+		await runtime.handle(envelope('exchange-steer', 'turn.steer', {
+			...request,
+			inputs: [{ kind: 'user.steer', content: 'apply this at the next exchange', steer_id: 'steer-1' }],
+		}))
+		assert.equal(events.some(event => event.type === 'turn.steer.accepted' && event.steer_id === 'steer-1'), true)
 		await runtime.handle(envelope('exchange-2', 'turn.resume', {
 			...request,
 			inputs: [{ kind: 'tool.result', tool_call_id: call?.id, content: root }],
 		}))
 		await terminal
 		assert.equal(events.at(-1)?.type, 'turn.completed', JSON.stringify(events))
+		assert.equal(events.some(event => event.type === 'turn.steer.applied' && event.steer_id === 'steer-1'), true, JSON.stringify(events))
 		assert.equal(events.filter(event => event.type === 'assistant.delta').map(event => event.text).join(''), 'Pi bridge works')
 		assert.equal(requestCount, 2)
   } finally {
@@ -155,7 +169,7 @@ test('Pi runtime waits for cancellation before accepting the next turn', { timeo
     if (exchangeId === 'exchange-next' && event.type === 'turn.completed') nextDone?.()
   })
   const request: TurnRequest = {
-    conversation_id: 'cancel-conversation', task_id: 'cancel-task', request_id: 'request-1',
+    conversation_id: 'cancel-conversation', turn_id: 'cancel-turn', task_id: 'cancel-task', request_id: 'request-1',
     working_dir: root, inputs: [{ kind: 'user.message', content: 'run a tool' }],
   }
 
@@ -163,11 +177,11 @@ test('Pi runtime waits for cancellation before accepting the next turn', { timeo
     await runtime.handle(envelope('exchange-start', 'turn.start', request))
     await awaitingTool
     await runtime.handle(envelope('exchange-cancel', 'turn.cancel', {
-      conversation_id: request.conversation_id, task_id: request.task_id,
+      conversation_id: request.conversation_id, turn_id: request.turn_id, task_id: request.task_id,
     }))
     assert.equal(events.some(item => item.exchangeId === 'exchange-cancel' && item.event.type === 'turn.cancelled'), true)
     await runtime.handle(envelope('exchange-next', 'turn.start', {
-      ...request, request_id: 'request-2', inputs: [{ kind: 'user.message', content: 'continue safely' }],
+      ...request, turn_id: 'cancel-turn-2', request_id: 'request-2', inputs: [{ kind: 'user.message', content: 'continue safely' }],
     }))
     await nextCompleted
     assert.equal(events.filter(item => item.exchangeId === 'exchange-next' && item.event.type === 'assistant.delta').map(item => item.event.text).join(''), 'next turn works')

@@ -61,7 +61,8 @@ type Server struct {
 	runtimeMu        sync.RWMutex
 	conversations    map[string]*Conversation
 	runningTasks     sync.Map // taskID → context.CancelFunc
-	externalTasks    sync.Map // taskID → agentruntime.Driver while a framework turn is active
+	activeTurns      activeTurnRegistry
+	steers           steerRegistry
 	externalPending  sync.Map // taskID → *externalToolBatch completion barrier
 	externalFinished sync.Map // taskID → bounded *externalToolResultHistory tombstones
 	runtimeDriver    agentruntime.Driver
@@ -271,8 +272,7 @@ func main() {
 	mux.HandleFunc("/settings/profiles", server.handleProfiles)
 	mux.HandleFunc("/settings/profiles/{name}", server.handleProfile)
 	mux.HandleFunc("/settings/profiles/{name}/activate", server.handleProfileActivate)
-	mux.HandleFunc("POST /agent/tasks/{task_id}/cancel", server.handleCancelTask)
-	mux.HandleFunc("POST /agent/tasks/{task_id}/steer", server.handleSteerTask)
+	registerAgentControlRoutes(mux, server)
 	mux.HandleFunc("/settings/memory/status", server.handleMemoryStatus)
 	mux.HandleFunc("POST /settings/memory/clear-session", server.handleMemoryClearSession)
 	mux.HandleFunc("POST /settings/memory/clear-project", server.handleMemoryClearProject)
@@ -300,6 +300,16 @@ func main() {
 	defer closeCancel()
 	if err := server.closeBackground(closeCtx); err != nil {
 		log.Printf("Failed graceful background shutdown: %v", err)
+	}
+}
+
+func registerAgentControlRoutes(mux *http.ServeMux, server *Server) {
+	// Warp's public API client prefixes these controls with /api/v1. Keep the
+	// unprefixed routes for older local clients and direct integrations.
+	for _, prefix := range []string{"", "/api/v1"} {
+		mux.HandleFunc("POST "+prefix+"/agent/tasks/{task_id}/cancel", server.handleCancelTask)
+		mux.HandleFunc("POST "+prefix+"/agent/tasks/{task_id}/steer", server.handleSteerTask)
+		mux.HandleFunc("GET "+prefix+"/agent/tasks/{task_id}/steers/{steer_id}", server.handleSteerStatus)
 	}
 }
 
@@ -473,16 +483,23 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing task_id", http.StatusBadRequest)
 		return
 	}
-	if value, ok := s.externalTasks.Load(taskID); ok {
-		if driver, ok := value.(agentruntime.Driver); ok {
+	if turn, ok := s.activeTurns.loadByWarpTask(taskID); ok {
+		snapshot := turn.snapshot()
+		if snapshot.Driver != nil {
+			turn.setState(agentTurnCancelling)
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 			defer cancel()
-			if err := driver.Cancel(ctx, taskID); err != nil {
-				log.Printf("[RUNTIME:%s] cancel task %s: %v", driver.Name(), taskID, err)
-				http.Error(w, "failed to cancel external agent task", http.StatusBadGateway)
+			if err := snapshot.Driver.Cancel(ctx, agentruntime.TurnControl{
+				ConversationID: snapshot.ConversationID,
+				TurnID:         snapshot.TurnID,
+				TaskID:         taskID,
+			}); err != nil {
+				turn.setState(snapshot.State)
+				log.Printf("[RUNTIME:%s] cancel turn=%s task=%s: %v", snapshot.Driver.Name(), snapshot.TurnID, taskID, err)
+				http.Error(w, "failed to cancel external agent turn", http.StatusBadGateway)
 				return
 			}
-			s.externalTasks.Delete(taskID)
+			s.activeTurns.finish(taskID)
 			s.finishExternalPending(taskID)
 		}
 	} else if cancel, ok := s.runningTasks.Load(taskID); ok {
@@ -490,6 +507,7 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 			fn()
 		}
 	}
+	s.steers.cancelTask(taskID)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode("ok")
 }
@@ -497,6 +515,7 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 type steerTaskRequest struct {
 	ConversationID string `json:"conversation_id"`
 	Prompt         string `json:"prompt"`
+	SteerID        string `json:"steer_id"`
 }
 
 // handleSteerTask injects guidance into an active framework Turn without
@@ -513,20 +532,43 @@ func (s *Server) handleSteerTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid steer request", http.StatusBadRequest)
 		return
 	}
-	request.ConversationID = strings.TrimSpace(request.ConversationID)
 	request.Prompt = strings.TrimSpace(request.Prompt)
-	if request.ConversationID == "" || request.Prompt == "" {
-		http.Error(w, "conversation_id and prompt are required", http.StatusBadRequest)
+	if request.Prompt == "" {
+		http.Error(w, "prompt is required", http.StatusBadRequest)
+		return
+	}
+	request.SteerID = strings.TrimSpace(request.SteerID)
+	if request.SteerID == "" {
+		request.SteerID = uuid.NewString()
+	}
+	if _, err := uuid.Parse(request.SteerID); err != nil {
+		http.Error(w, "invalid steer_id", http.StatusBadRequest)
+		return
+	}
+	record, fresh, err := s.steers.reserve(request.SteerID, taskID, request.Prompt)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if !fresh {
+		if record.Status == steerSubmitting {
+			http.Error(w, "steer request is still being submitted", http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(record)
 		return
 	}
 
-	value, ok := s.externalTasks.Load(taskID)
+	turn, ok := s.activeTurns.loadByWarpTask(taskID)
 	if !ok {
+		s.steers.update(request.SteerID, steerFailed, "agent turn is no longer active")
 		http.Error(w, "agent turn is no longer active", http.StatusConflict)
 		return
 	}
-	driver, ok := value.(agentruntime.Driver)
-	if !ok {
+	snapshot := turn.snapshot()
+	if snapshot.Driver == nil || snapshot.State == agentTurnCancelling {
+		s.steers.update(request.SteerID, steerFailed, "agent runtime is unavailable")
 		http.Error(w, "agent runtime is unavailable", http.StatusConflict)
 		return
 	}
@@ -534,32 +576,48 @@ func (s *Server) handleSteerTask(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	steered := false
-	err := driver.Exchange(ctx, agentruntime.TurnRequest{
-		ConversationID: request.ConversationID,
+	err = snapshot.Driver.Exchange(ctx, agentruntime.TurnRequest{
+		ConversationID: snapshot.ConversationID,
+		TurnID:         snapshot.TurnID,
 		TaskID:         taskID,
 		RequestID:      uuid.NewString(),
 		Inputs: []agentruntime.Input{{
 			Kind:    agentruntime.InputUserSteer,
 			Content: request.Prompt,
+			SteerID: request.SteerID,
 		}},
 	}, func(event agentruntime.Event) error {
-		if event.Type == agentruntime.EventTurnSteered {
+		if event.Type == agentruntime.EventSteerAccepted && event.SteerID == request.SteerID {
 			steered = true
 		}
 		return nil
 	})
 	if err != nil {
-		log.Printf("[RUNTIME:%s] steer task %s: %v", driver.Name(), taskID, err)
+		s.steers.update(request.SteerID, steerFailed, err.Error())
+		log.Printf("[RUNTIME:%s] steer turn=%s task=%s client_conversation=%s: %v", snapshot.Driver.Name(), snapshot.TurnID, taskID, strings.TrimSpace(request.ConversationID), err)
 		http.Error(w, "failed to steer active agent turn", http.StatusBadGateway)
 		return
 	}
 	if !steered {
+		s.steers.update(request.SteerID, steerFailed, "agent runtime did not acknowledge steer")
 		http.Error(w, "agent runtime did not acknowledge steer", http.StatusBadGateway)
 		return
 	}
-	log.Printf("[RUNTIME:%s] queued steer task=%s conversation=%s", driver.Name(), taskID, request.ConversationID)
+	s.steers.update(request.SteerID, steerAccepted, "")
+	log.Printf("[RUNTIME:%s] queued steer turn=%s task=%s conversation=%s", snapshot.Driver.Name(), snapshot.TurnID, taskID, snapshot.ConversationID)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode("ok")
+	record, _ = s.steers.load(taskID, request.SteerID)
+	_ = json.NewEncoder(w).Encode(record)
+}
+
+func (s *Server) handleSteerStatus(w http.ResponseWriter, r *http.Request) {
+	record, ok := s.steers.load(strings.TrimSpace(r.PathValue("task_id")), strings.TrimSpace(r.PathValue("steer_id")))
+	if !ok {
+		http.Error(w, "steer request not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(record)
 }
 
 func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
@@ -639,7 +697,7 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 	conv.mu.Lock()
 	isSteer := false
 	if !isFollowUp && len(inputs) > 0 {
-		if _, active := s.externalTasks.Load(taskID); active {
+		if _, active := s.activeTurns.loadByWarpTask(taskID); active {
 			isSteer = true
 		}
 	}
@@ -690,6 +748,9 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 	s.runtimeMu.RLock()
 	runtimeDriver := s.runtimeDriver
 	if runtimeDriver != nil {
+		turn := s.activeTurns.begin(taskID, convID, runtimeDriver)
+		turn.setState(agentTurnRunning)
+		turnSnapshot := turn.snapshot()
 		// Input submitted while this task is still active steers the current Turn.
 		// It is injected by the framework before its next model exchange; it does
 		// not start a competing prompt and does not cancel an executing PTY command.
@@ -705,13 +766,16 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		s.runningTasks.Store(taskID, cancel)
 		defer s.runningTasks.Delete(taskID)
-		s.externalTasks.Store(taskID, runtimeDriver)
 
-		_, turnActive := s.runExternalAgent(ctx, runtimeDriver, w, flusher, conv, convID, requestID, taskID, isFollowUp || isSteer || taskIDFromClient, inputs, req.GetInput().GetContext())
+		_, turnActive := s.runExternalAgent(ctx, runtimeDriver, w, flusher, conv, turnSnapshot.ConversationID, turnSnapshot.TurnID, requestID, taskID, isFollowUp || isSteer || taskIDFromClient, inputs, req.GetInput().GetContext())
 		if turnActive {
-			s.externalTasks.Store(taskID, runtimeDriver)
+			if s.hasExternalPending(taskID) {
+				turn.setState(agentTurnAwaitingTool)
+			} else {
+				turn.setState(agentTurnRunning)
+			}
 		} else {
-			s.externalTasks.Delete(taskID)
+			s.activeTurns.finish(taskID)
 			s.finishExternalPending(taskID)
 		}
 		s.runtimeMu.RUnlock()

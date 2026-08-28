@@ -31,10 +31,10 @@ test('DSH serializes idempotent cancellation acknowledgements', { timeout: 10_00
 
   try {
     child.stdin.write(`${JSON.stringify(envelope('cancel-1', 'turn.cancel', {
-      conversation_id: 'conversation-1', task_id: 'missing-task',
+      conversation_id: 'conversation-1', turn_id: 'missing-turn', task_id: 'missing-task',
     }))}\n`)
     child.stdin.write(`${JSON.stringify(envelope('cancel-2', 'turn.cancel', {
-      conversation_id: 'conversation-1', task_id: 'missing-task',
+      conversation_id: 'conversation-1', turn_id: 'missing-turn', task_id: 'missing-task',
     }))}\n`)
     await done
     assert.deepEqual(events, [

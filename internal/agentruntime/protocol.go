@@ -20,18 +20,28 @@ const (
 type Input struct {
 	Kind       InputKind `json:"kind"`
 	Content    string    `json:"content"`
+	SteerID    string    `json:"steer_id,omitempty"`
 	ToolCallID string    `json:"tool_call_id,omitempty"`
 	Status     string    `json:"status,omitempty"`
 }
 
 type TurnRequest struct {
 	ConversationID string            `json:"conversation_id"`
+	TurnID         string            `json:"turn_id"`
 	TaskID         string            `json:"task_id"`
 	RequestID      string            `json:"request_id"`
 	SystemPrompt   string            `json:"system_prompt,omitempty"`
 	WorkingDir     string            `json:"working_dir,omitempty"`
 	Inputs         []Input           `json:"inputs"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
+}
+
+// TurnControl identifies one active Agent Turn. TaskID is the Warp UI bridge
+// key and must never replace the canonical ConversationID or TurnID.
+type TurnControl struct {
+	ConversationID string `json:"conversation_id"`
+	TurnID         string `json:"turn_id"`
+	TaskID         string `json:"task_id"`
 }
 
 type ToolCall struct {
@@ -60,7 +70,8 @@ const (
 	EventToolCallBatch  EventType = "tool.call.batch"
 	EventTodoChanged    EventType = "todo.changed"
 	EventTurnAwaiting   EventType = "turn.awaiting_tool"
-	EventTurnSteered    EventType = "turn.steered"
+	EventSteerAccepted  EventType = "turn.steer.accepted"
+	EventSteerApplied   EventType = "turn.steer.applied"
 	EventTurnCancelling EventType = "turn.cancelling"
 	EventTurnCancelled  EventType = "turn.cancelled"
 	EventTurnCompleted  EventType = "turn.completed"
@@ -70,6 +81,7 @@ const (
 
 type Event struct {
 	Type      EventType       `json:"type"`
+	SteerID   string          `json:"steer_id,omitempty"`
 	Text      string          `json:"text,omitempty"`
 	ToolCalls []ToolCall      `json:"tool_calls,omitempty"`
 	Error     string          `json:"error,omitempty"`
@@ -78,7 +90,7 @@ type Event struct {
 
 func (e Event) IsExchangeTerminal() bool {
 	switch e.Type {
-	case EventTurnAwaiting, EventTurnSteered, EventTurnCancelled, EventTurnCompleted, EventTurnFailed:
+	case EventTurnAwaiting, EventSteerAccepted, EventTurnCancelled, EventTurnCompleted, EventTurnFailed:
 		return true
 	default:
 		return false
@@ -122,6 +134,6 @@ func (e Envelope) Validate() error {
 type Driver interface {
 	Name() string
 	Exchange(context.Context, TurnRequest, func(Event) error) error
-	Cancel(context.Context, string) error
+	Cancel(context.Context, TurnControl) error
 	Close(context.Context) error
 }

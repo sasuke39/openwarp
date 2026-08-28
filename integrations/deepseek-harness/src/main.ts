@@ -15,9 +15,11 @@ assertSupportedNode()
 interface SessionState {
   harness: DeepSeekHarness
   exchangeId: string
+  turnId: string
   taskId: string
   running: boolean
   sawTextDelta: boolean
+  pendingSteers: Map<string, string>
 }
 
 const require = createRequire(import.meta.url)
@@ -81,10 +83,11 @@ async function handleSerial(frame: ReturnType<typeof parseEnvelope>): Promise<vo
       await steerTurn(frame.exchange_id, frame.payload as TurnRequest)
       return
     case 'turn.cancel': {
-      const taskId = (frame.payload as { task_id?: unknown })?.task_id
+      const payload = frame.payload as { task_id?: unknown; turn_id?: unknown }
+      const taskId = payload?.task_id
       if (typeof taskId !== 'string') throw new Error('turn.cancel requires task_id')
       writeEvent(frame.exchange_id, { type: 'turn.cancelling' })
-      await cancelTask(taskId)
+      await cancelTask(taskId, typeof payload.turn_id === 'string' ? payload.turn_id : '')
       writeEvent(frame.exchange_id, { type: 'turn.cancelled' })
       return
     }
@@ -115,6 +118,7 @@ async function enqueue(conversationId: string, operation: () => Promise<void>): 
 }
 
 function startTurn(exchangeId: string, request: TurnRequest): void {
+  if (typeof request.turn_id !== 'string' || request.turn_id.length === 0) throw new Error('turn.start requires turn_id')
   const prompt = request.inputs
     .filter(input => input.kind === 'user.message')
     .map(input => input.content)
@@ -152,14 +156,17 @@ function startTurn(exchangeId: string, request: TurnRequest): void {
           : { maxTokens: positiveInteger(process.env.DSH_MAX_TOKENS) }),
       }),
       exchangeId,
+      turnId: request.turn_id,
       taskId: request.task_id,
       running: false,
       sawTextDelta: false,
+      pendingSteers: new Map(),
     }
     sessions.set(request.conversation_id, state)
   }
   if (state.running) throw new Error(`conversation ${request.conversation_id} already has a running turn`)
   state.exchangeId = exchangeId
+  state.turnId = request.turn_id
   state.taskId = request.task_id
   state.running = true
   state.sawTextDelta = false
@@ -192,6 +199,7 @@ function startTurn(exchangeId: string, request: TurnRequest): void {
 async function resumeTurn(exchangeId: string, request: TurnRequest): Promise<void> {
   const state = sessions.get(request.conversation_id)
   if (state === undefined || !state.running) throw new Error(`conversation ${request.conversation_id} has no suspended turn`)
+  assertCurrentTurn(state, request)
   state.exchangeId = exchangeId
   state.taskId = request.task_id
   for (const input of request.inputs) {
@@ -214,11 +222,22 @@ async function resumeTurn(exchangeId: string, request: TurnRequest): Promise<voi
 async function steerTurn(exchangeId: string, request: TurnRequest): Promise<void> {
   const state = sessions.get(request.conversation_id)
   if (state === undefined || !state.running) throw new Error(`conversation ${request.conversation_id} has no running turn to steer`)
-  const prompt = request.inputs.filter(input => input.kind === 'user.steer').map(input => input.content).join('\n\n')
+  assertCurrentTurn(state, request)
+  const inputs = request.inputs.filter(input => input.kind === 'user.steer')
+  const prompt = inputs.map(input => input.content).join('\n\n')
   if (prompt.length === 0) throw new Error('turn.steer requires a steering message')
+  const steerId = inputs[0]?.steer_id
+  if (typeof steerId !== 'string' || steerId.length === 0) throw new Error('turn.steer requires steer_id')
   await state.harness.start()
-  await state.harness.client.prompt(request.conversation_id, [{ type: 'text', text: prompt }])
-  writeEvent(exchangeId, { type: 'turn.steered' })
+  const messageId = await state.harness.client.prompt(request.conversation_id, [{ type: 'text', text: prompt }])
+  state.pendingSteers.set(messageId, steerId)
+  writeEvent(exchangeId, { type: 'turn.steer.accepted', steer_id: steerId })
+}
+
+function assertCurrentTurn(state: SessionState, request: TurnRequest): void {
+  if (typeof request.turn_id !== 'string' || request.turn_id.length === 0 || state.turnId !== request.turn_id) {
+    throw new Error(`stale turn ${request.turn_id} for conversation ${request.conversation_id}`)
+  }
 }
 
 function onNotification(conversationId: string, notification: HarnessNotification): void {
@@ -226,6 +245,17 @@ function onNotification(conversationId: string, notification: HarnessNotificatio
   const state = sessions.get(conversationId)
   if (state === undefined) return
   const event = notification.params.event as { type?: string; data?: Record<string, unknown> } | undefined
+  if (event?.type === 'user/message') {
+    const messageId = event.data?.id
+    if (typeof messageId === 'string') {
+      const steerId = state.pendingSteers.get(messageId)
+      if (steerId !== undefined) {
+        state.pendingSteers.delete(messageId)
+        writeEvent(state.exchangeId, { type: 'turn.steer.applied', steer_id: steerId })
+      }
+    }
+    return
+  }
   if (event?.type === 'assistant/chunk') {
     const chunk = event.data?.chunk as { type?: string; text?: unknown } | undefined
     if (chunk?.type === 'text-delta' && typeof chunk.text === 'string') {
@@ -285,8 +315,9 @@ function attachToolSocket(socket: Socket): void {
   })
 }
 
-async function cancelTask(taskId: string): Promise<void> {
-  const matching = [...sessions.entries()].filter(([, state]) => state.taskId === taskId)
+async function cancelTask(taskId: string, turnId: string): Promise<void> {
+  const matching = [...sessions.entries()].filter(([, state]) =>
+    state.taskId === taskId && (turnId.length === 0 || state.turnId === turnId))
   await Promise.all(matching.map(async ([conversationId, state]) => {
     sessions.delete(conversationId)
     await state.harness.close()
