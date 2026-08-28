@@ -271,8 +271,7 @@ func main() {
 	mux.HandleFunc("/settings/profiles", server.handleProfiles)
 	mux.HandleFunc("/settings/profiles/{name}", server.handleProfile)
 	mux.HandleFunc("/settings/profiles/{name}/activate", server.handleProfileActivate)
-	mux.HandleFunc("POST /agent/tasks/{task_id}/cancel", server.handleCancelTask)
-	mux.HandleFunc("POST /agent/tasks/{task_id}/steer", server.handleSteerTask)
+	registerAgentControlRoutes(mux, server)
 	mux.HandleFunc("/settings/memory/status", server.handleMemoryStatus)
 	mux.HandleFunc("POST /settings/memory/clear-session", server.handleMemoryClearSession)
 	mux.HandleFunc("POST /settings/memory/clear-project", server.handleMemoryClearProject)
@@ -300,6 +299,15 @@ func main() {
 	defer closeCancel()
 	if err := server.closeBackground(closeCtx); err != nil {
 		log.Printf("Failed graceful background shutdown: %v", err)
+	}
+}
+
+func registerAgentControlRoutes(mux *http.ServeMux, server *Server) {
+	// Warp's public API client prefixes these controls with /api/v1. Keep the
+	// unprefixed routes for older local clients and direct integrations.
+	for _, prefix := range []string{"", "/api/v1"} {
+		mux.HandleFunc("POST "+prefix+"/agent/tasks/{task_id}/cancel", server.handleCancelTask)
+		mux.HandleFunc("POST "+prefix+"/agent/tasks/{task_id}/steer", server.handleSteerTask)
 	}
 }
 

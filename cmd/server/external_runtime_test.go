@@ -551,6 +551,36 @@ func TestHandleSteerTaskInjectsGuidanceIntoActiveTurn(t *testing.T) {
 	}
 }
 
+func TestAgentControlRoutesAcceptWarpPublicAPIPrefix(t *testing.T) {
+	for _, path := range []string{
+		"/agent/tasks/task-active/steer",
+		"/api/v1/agent/tasks/task-active/steer",
+	} {
+		t.Run(path, func(t *testing.T) {
+			driver := &steerRecordingDriver{}
+			server := &Server{}
+			server.externalTasks.Store("task-active", agentruntime.Driver(driver))
+			mux := http.NewServeMux()
+			registerAgentControlRoutes(mux, server)
+			request := httptest.NewRequest(
+				http.MethodPost,
+				path,
+				bytes.NewBufferString(`{"conversation_id":"conversation-1","prompt":"steer now"}`),
+			)
+			recorder := httptest.NewRecorder()
+
+			mux.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("steer route %s status = %d, body = %s", path, recorder.Code, recorder.Body.String())
+			}
+			if driver.request.TaskID != "task-active" || len(driver.request.Inputs) != 1 || driver.request.Inputs[0].Content != "steer now" {
+				t.Fatalf("steer route %s request = %+v", path, driver.request)
+			}
+		})
+	}
+}
+
 func TestHandleSteerTaskRejectsInactiveTurn(t *testing.T) {
 	server := &Server{}
 	body := bytes.NewBufferString(`{"conversation_id":"conversation-1","prompt":"continue"}`)
