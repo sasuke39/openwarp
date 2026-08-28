@@ -82,21 +82,22 @@ test('Pi runtime suspends for a Warp tool and resumes the SDK session', { timeou
 			runtime.handle(envelope('exchange-stale-steer', 'turn.steer', {
 				...request,
 				turn_id: 'stale-turn',
-				inputs: [{ kind: 'user.steer', content: 'must not enter the active Turn' }],
+				inputs: [{ kind: 'user.steer', content: 'must not enter the active Turn', steer_id: 'stale-steer' }],
 			})),
 			/stale turn/,
 		)
 		await runtime.handle(envelope('exchange-steer', 'turn.steer', {
 			...request,
-			inputs: [{ kind: 'user.steer', content: 'apply this at the next exchange' }],
+			inputs: [{ kind: 'user.steer', content: 'apply this at the next exchange', steer_id: 'steer-1' }],
 		}))
-		assert.equal(events.some(event => event.type === 'turn.steered'), true)
+		assert.equal(events.some(event => event.type === 'turn.steer.accepted' && event.steer_id === 'steer-1'), true)
 		await runtime.handle(envelope('exchange-2', 'turn.resume', {
 			...request,
 			inputs: [{ kind: 'tool.result', tool_call_id: call?.id, content: root }],
 		}))
 		await terminal
 		assert.equal(events.at(-1)?.type, 'turn.completed', JSON.stringify(events))
+		assert.equal(events.some(event => event.type === 'turn.steer.applied' && event.steer_id === 'steer-1'), true, JSON.stringify(events))
 		assert.equal(events.filter(event => event.type === 'assistant.delta').map(event => event.text).join(''), 'Pi bridge works')
 		assert.equal(requestCount, 2)
   } finally {

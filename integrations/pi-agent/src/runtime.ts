@@ -22,6 +22,7 @@ interface SessionState extends ToolOwner {
   taskId: string
   runToken: number
   sawAssistantText: boolean
+  pendingSteers: Array<{ id: string; prompt: string }>
   unsubscribe(): void
 }
 
@@ -146,10 +147,19 @@ export class PiAgentRuntime {
     const state = this.sessions.get(request.conversation_id)
     if (state === undefined || !state.active) throw new Error(`conversation ${request.conversation_id} has no running turn to steer`)
     this.assertCurrentTurn(state, request)
-    const prompt = request.inputs.filter(input => input.kind === 'user.steer').map(input => input.content).join('\n\n')
+    const inputs = request.inputs.filter(input => input.kind === 'user.steer')
+    const prompt = inputs.map(input => input.content).join('\n\n')
     if (prompt.length === 0) throw new Error('turn.steer requires a steering message')
-    await state.session.steer(prompt)
-    this.emitFrame(exchangeId, { type: 'turn.steered' })
+    const steerId = inputs[0]?.steer_id
+    if (typeof steerId !== 'string' || steerId.length === 0) throw new Error('turn.steer requires steer_id')
+    state.pendingSteers.push({ id: steerId, prompt })
+    try {
+      await state.session.steer(prompt)
+    } catch (error) {
+      state.pendingSteers = state.pendingSteers.filter(item => item.id !== steerId)
+      throw error
+    }
+    this.emitFrame(exchangeId, { type: 'turn.steer.accepted', steer_id: steerId })
   }
 
   private assertCurrentTurn(state: SessionState, request: TurnRequest): void {
@@ -229,6 +239,7 @@ export class PiAgentRuntime {
     state.taskId = request.task_id
     state.runToken = 0
     state.sawAssistantText = false
+    state.pendingSteers = []
     state.unsubscribe = result.session.subscribe(event => this.onSessionEvent(state, event))
     return state
   }
@@ -282,6 +293,15 @@ export class PiAgentRuntime {
 
   private onSessionEvent(state: SessionState, event: AgentSessionEvent): void {
     if (!state.active) return
+    if (event.type === 'message_start') {
+      const prompt = userText(event.message)
+      const index = state.pendingSteers.findIndex(item => item.prompt === prompt)
+      if (index >= 0) {
+        const [steer] = state.pendingSteers.splice(index, 1)
+        state.emit({ type: 'turn.steer.applied', steer_id: steer.id })
+      }
+      return
+    }
     if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
       state.sawAssistantText = true
       state.emit({ type: 'assistant.delta', text: event.assistantMessageEvent.delta })
@@ -313,6 +333,18 @@ export class PiAgentRuntime {
     state.session.dispose()
     await state.settings.flush()
   }
+}
+
+function userText(message: unknown): string {
+  if (typeof message !== 'object' || message === null || (message as { role?: unknown }).role !== 'user') return ''
+  const content = (message as { content?: unknown }).content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content.flatMap(item => {
+    if (typeof item !== 'object' || item === null) return []
+    const block = item as { type?: unknown; text?: unknown }
+    return block.type === 'text' && typeof block.text === 'string' ? [block.text] : []
+  }).join('')
 }
 
 function assistantText(message: unknown): string {

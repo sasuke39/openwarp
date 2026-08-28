@@ -668,12 +668,18 @@ func TestEndToEndAgentRequestUpdatesSessionAndProjectMemory(t *testing.T) {
 		t.Fatalf("expected memory status to expose context-derived compaction settings: %+v", status.ContextWindow)
 	}
 
-	events, err := os.ReadFile(filepath.Join(cfg.Memory.BaseDir, "events.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(events), "session_memory_updated") || !strings.Contains(string(events), "project_memory_updated") {
-		t.Fatalf("expected both update events, got: %s", string(events))
+	eventsPath := filepath.Join(cfg.Memory.BaseDir, "events.jsonl")
+	var events []byte
+	eventsDeadline := time.Now().Add(3 * time.Second)
+	for {
+		events, err = os.ReadFile(eventsPath)
+		if err == nil && strings.Contains(string(events), "session_memory_updated") && strings.Contains(string(events), "project_memory_updated") {
+			break
+		}
+		if time.Now().After(eventsDeadline) {
+			t.Fatalf("expected both update events, got: %s (read error: %v)", string(events), err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

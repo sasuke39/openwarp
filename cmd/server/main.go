@@ -62,6 +62,7 @@ type Server struct {
 	conversations    map[string]*Conversation
 	runningTasks     sync.Map // taskID → context.CancelFunc
 	activeTurns      activeTurnRegistry
+	steers           steerRegistry
 	externalPending  sync.Map // taskID → *externalToolBatch completion barrier
 	externalFinished sync.Map // taskID → bounded *externalToolResultHistory tombstones
 	runtimeDriver    agentruntime.Driver
@@ -308,6 +309,7 @@ func registerAgentControlRoutes(mux *http.ServeMux, server *Server) {
 	for _, prefix := range []string{"", "/api/v1"} {
 		mux.HandleFunc("POST "+prefix+"/agent/tasks/{task_id}/cancel", server.handleCancelTask)
 		mux.HandleFunc("POST "+prefix+"/agent/tasks/{task_id}/steer", server.handleSteerTask)
+		mux.HandleFunc("GET "+prefix+"/agent/tasks/{task_id}/steers/{steer_id}", server.handleSteerStatus)
 	}
 }
 
@@ -505,6 +507,7 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 			fn()
 		}
 	}
+	s.steers.cancelTask(taskID)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode("ok")
 }
@@ -512,6 +515,7 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 type steerTaskRequest struct {
 	ConversationID string `json:"conversation_id"`
 	Prompt         string `json:"prompt"`
+	SteerID        string `json:"steer_id"`
 }
 
 // handleSteerTask injects guidance into an active framework Turn without
@@ -533,14 +537,38 @@ func (s *Server) handleSteerTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "prompt is required", http.StatusBadRequest)
 		return
 	}
+	request.SteerID = strings.TrimSpace(request.SteerID)
+	if request.SteerID == "" {
+		request.SteerID = uuid.NewString()
+	}
+	if _, err := uuid.Parse(request.SteerID); err != nil {
+		http.Error(w, "invalid steer_id", http.StatusBadRequest)
+		return
+	}
+	record, fresh, err := s.steers.reserve(request.SteerID, taskID, request.Prompt)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if !fresh {
+		if record.Status == steerSubmitting {
+			http.Error(w, "steer request is still being submitted", http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(record)
+		return
+	}
 
 	turn, ok := s.activeTurns.loadByWarpTask(taskID)
 	if !ok {
+		s.steers.update(request.SteerID, steerFailed, "agent turn is no longer active")
 		http.Error(w, "agent turn is no longer active", http.StatusConflict)
 		return
 	}
 	snapshot := turn.snapshot()
 	if snapshot.Driver == nil || snapshot.State == agentTurnCancelling {
+		s.steers.update(request.SteerID, steerFailed, "agent runtime is unavailable")
 		http.Error(w, "agent runtime is unavailable", http.StatusConflict)
 		return
 	}
@@ -548,7 +576,7 @@ func (s *Server) handleSteerTask(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	steered := false
-	err := snapshot.Driver.Exchange(ctx, agentruntime.TurnRequest{
+	err = snapshot.Driver.Exchange(ctx, agentruntime.TurnRequest{
 		ConversationID: snapshot.ConversationID,
 		TurnID:         snapshot.TurnID,
 		TaskID:         taskID,
@@ -556,25 +584,40 @@ func (s *Server) handleSteerTask(w http.ResponseWriter, r *http.Request) {
 		Inputs: []agentruntime.Input{{
 			Kind:    agentruntime.InputUserSteer,
 			Content: request.Prompt,
+			SteerID: request.SteerID,
 		}},
 	}, func(event agentruntime.Event) error {
-		if event.Type == agentruntime.EventTurnSteered {
+		if event.Type == agentruntime.EventSteerAccepted && event.SteerID == request.SteerID {
 			steered = true
 		}
 		return nil
 	})
 	if err != nil {
+		s.steers.update(request.SteerID, steerFailed, err.Error())
 		log.Printf("[RUNTIME:%s] steer turn=%s task=%s client_conversation=%s: %v", snapshot.Driver.Name(), snapshot.TurnID, taskID, strings.TrimSpace(request.ConversationID), err)
 		http.Error(w, "failed to steer active agent turn", http.StatusBadGateway)
 		return
 	}
 	if !steered {
+		s.steers.update(request.SteerID, steerFailed, "agent runtime did not acknowledge steer")
 		http.Error(w, "agent runtime did not acknowledge steer", http.StatusBadGateway)
 		return
 	}
+	s.steers.update(request.SteerID, steerAccepted, "")
 	log.Printf("[RUNTIME:%s] queued steer turn=%s task=%s conversation=%s", snapshot.Driver.Name(), snapshot.TurnID, taskID, snapshot.ConversationID)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode("ok")
+	record, _ = s.steers.load(taskID, request.SteerID)
+	_ = json.NewEncoder(w).Encode(record)
+}
+
+func (s *Server) handleSteerStatus(w http.ResponseWriter, r *http.Request) {
+	record, ok := s.steers.load(strings.TrimSpace(r.PathValue("task_id")), strings.TrimSpace(r.PathValue("steer_id")))
+	if !ok {
+		http.Error(w, "steer request not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(record)
 }
 
 func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {

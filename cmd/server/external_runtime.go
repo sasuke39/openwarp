@@ -113,8 +113,10 @@ func (s *Server) runExternalAgent(
 				return err
 			}
 			s.setExternalPending(taskID, pending)
-		case agentruntime.EventTurnSteered:
+		case agentruntime.EventSteerAccepted:
 			sawSteered = true
+		case agentruntime.EventSteerApplied:
+			s.steers.update(event.SteerID, steerApplied, "")
 		case agentruntime.EventDiagnostic:
 			log.Printf("[RUNTIME:%s] %s", driver.Name(), event.Text)
 		}

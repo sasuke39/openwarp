@@ -10,6 +10,7 @@ export interface Envelope<T = unknown> {
 export interface RuntimeInput {
   kind: 'user.message' | 'user.steer' | 'tool.result'
   content: string
+  steer_id?: string
   tool_call_id?: string
   status?: string
 }
@@ -27,6 +28,7 @@ export interface TurnRequest {
 
 export interface RuntimeEvent {
   type: string
+  steer_id?: string
   text?: string
   error?: string
   tool_calls?: Array<{ id: string; name: string; arguments: unknown }>

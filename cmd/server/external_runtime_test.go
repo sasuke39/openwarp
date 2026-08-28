@@ -522,13 +522,38 @@ func TestHandleCancelTaskCancelsSuspendedExternalTurn(t *testing.T) {
 }
 
 type steerRecordingDriver struct {
-	request agentruntime.TurnRequest
+	request   agentruntime.TurnRequest
+	exchanges int
 }
 
 func (driver *steerRecordingDriver) Name() string { return "steer-recording-runtime" }
 func (driver *steerRecordingDriver) Exchange(_ context.Context, request agentruntime.TurnRequest, emit func(agentruntime.Event) error) error {
 	driver.request = request
-	return emit(agentruntime.Event{Type: agentruntime.EventTurnSteered})
+	driver.exchanges++
+	steerID := ""
+	if len(request.Inputs) > 0 {
+		steerID = request.Inputs[0].SteerID
+	}
+	return emit(agentruntime.Event{Type: agentruntime.EventSteerAccepted, SteerID: steerID})
+}
+
+func TestHandleSteerTaskIsIdempotentBySteerID(t *testing.T) {
+	driver := &steerRecordingDriver{}
+	server := &Server{}
+	server.activeTurns.begin("task-active", "runtime-conversation", driver)
+	body := `{"conversation_id":"ui-conversation","prompt":"use mirror","steer_id":"6e9b5b7f-a80f-4f7f-bb8b-a9328820bd3b"}`
+	for attempt := 0; attempt < 2; attempt++ {
+		request := httptest.NewRequest(http.MethodPost, "/agent/tasks/task-active/steer", bytes.NewBufferString(body))
+		request.SetPathValue("task_id", "task-active")
+		recorder := httptest.NewRecorder()
+		server.handleSteerTask(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("attempt %d status = %d, body = %s", attempt, recorder.Code, recorder.Body.String())
+		}
+	}
+	if driver.exchanges != 1 {
+		t.Fatalf("runtime received %d steer exchanges, want 1", driver.exchanges)
+	}
 }
 func (driver *steerRecordingDriver) Cancel(context.Context, agentruntime.TurnControl) error {
 	return nil

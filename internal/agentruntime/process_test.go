@@ -206,7 +206,11 @@ func TestProcessDriverHelper(t *testing.T) {
 			_ = json.Unmarshal(frame.Payload, &request)
 			diagnostic, _ := NewEnvelope(frame.ExchangeID, "event", Event{Type: EventDiagnostic, Text: request.ConversationID + "|" + request.TurnID})
 			_ = encoder.Encode(diagnostic)
-			out, _ := NewEnvelope(frame.ExchangeID, "event", Event{Type: EventTurnSteered})
+			steerID := ""
+			if len(request.Inputs) > 0 {
+				steerID = request.Inputs[0].SteerID
+			}
+			out, _ := NewEnvelope(frame.ExchangeID, "event", Event{Type: EventSteerAccepted, SteerID: steerID})
 			_ = encoder.Encode(out)
 		case "turn.cancel":
 			for _, event := range []Event{{Type: EventTurnCancelling}, {Type: EventTurnCancelled}} {

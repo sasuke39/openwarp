@@ -19,6 +19,7 @@ interface SessionState {
   taskId: string
   running: boolean
   sawTextDelta: boolean
+  pendingSteers: Map<string, string>
 }
 
 const require = createRequire(import.meta.url)
@@ -159,6 +160,7 @@ function startTurn(exchangeId: string, request: TurnRequest): void {
       taskId: request.task_id,
       running: false,
       sawTextDelta: false,
+      pendingSteers: new Map(),
     }
     sessions.set(request.conversation_id, state)
   }
@@ -221,11 +223,15 @@ async function steerTurn(exchangeId: string, request: TurnRequest): Promise<void
   const state = sessions.get(request.conversation_id)
   if (state === undefined || !state.running) throw new Error(`conversation ${request.conversation_id} has no running turn to steer`)
   assertCurrentTurn(state, request)
-  const prompt = request.inputs.filter(input => input.kind === 'user.steer').map(input => input.content).join('\n\n')
+  const inputs = request.inputs.filter(input => input.kind === 'user.steer')
+  const prompt = inputs.map(input => input.content).join('\n\n')
   if (prompt.length === 0) throw new Error('turn.steer requires a steering message')
+  const steerId = inputs[0]?.steer_id
+  if (typeof steerId !== 'string' || steerId.length === 0) throw new Error('turn.steer requires steer_id')
   await state.harness.start()
-  await state.harness.client.prompt(request.conversation_id, [{ type: 'text', text: prompt }])
-  writeEvent(exchangeId, { type: 'turn.steered' })
+  const messageId = await state.harness.client.prompt(request.conversation_id, [{ type: 'text', text: prompt }])
+  state.pendingSteers.set(messageId, steerId)
+  writeEvent(exchangeId, { type: 'turn.steer.accepted', steer_id: steerId })
 }
 
 function assertCurrentTurn(state: SessionState, request: TurnRequest): void {
@@ -239,6 +245,17 @@ function onNotification(conversationId: string, notification: HarnessNotificatio
   const state = sessions.get(conversationId)
   if (state === undefined) return
   const event = notification.params.event as { type?: string; data?: Record<string, unknown> } | undefined
+  if (event?.type === 'user/message') {
+    const messageId = event.data?.id
+    if (typeof messageId === 'string') {
+      const steerId = state.pendingSteers.get(messageId)
+      if (steerId !== undefined) {
+        state.pendingSteers.delete(messageId)
+        writeEvent(state.exchangeId, { type: 'turn.steer.applied', steer_id: steerId })
+      }
+    }
+    return
+  }
   if (event?.type === 'assistant/chunk') {
     const chunk = event.data?.chunk as { type?: string; text?: unknown } | undefined
     if (chunk?.type === 'text-delta' && typeof chunk.text === 'string') {
