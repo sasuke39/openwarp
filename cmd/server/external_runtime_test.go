@@ -70,9 +70,9 @@ func TestTranslateExternalShellExecutionModes(t *testing.T) {
 		wait bool
 	}{
 		{name: "background", args: `{"command":"sleep 30","executionMode":"background"}`, wait: true},
-		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: false},
+		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: true},
 		{name: "dsh legacy background", args: `{"command":"sleep 30","run_in_background":true}`, wait: true},
-		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: false},
+		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

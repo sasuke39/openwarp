@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sasuke39/open-warp/internal/agentruntime"
 )
 
 // TestManagedBackgroundCommandOverRealSSH is opt-in because it requires an SSH
@@ -31,8 +33,48 @@ func TestManagedBackgroundCommandOverRealSSH(t *testing.T) {
 	}
 
 	runner := realSSHRunner{target: target, key: key, port: port}
-	if output := runner.run(t, "printf ssh-short-ok"); output != "ssh-short-ok" {
-		t.Fatalf("short SSH command output = %q", output)
+	foregroundCall, err := translateExternalToolCall(agentruntime.ToolCall{
+		ID:        "foreground-over-ssh",
+		Name:      agentruntime.ToolWorkspaceShell,
+		Arguments: json.RawMessage(`{"command":"printf ssh-short-ok","executionMode":"foreground"}`),
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foregroundArgs struct {
+		Command           string `json:"command"`
+		WaitUntilComplete *bool  `json:"wait_until_complete"`
+	}
+	if err := json.Unmarshal(foregroundCall.Args, &foregroundArgs); err != nil {
+		t.Fatal(err)
+	}
+	if foregroundArgs.WaitUntilComplete == nil || !*foregroundArgs.WaitUntilComplete {
+		t.Fatal("managed SSH foreground command must wait for direct command output")
+	}
+	if output := runner.run(t, foregroundArgs.Command); output != "ssh-short-ok" {
+		t.Fatalf("foreground SSH command output = %q", output)
+	}
+
+	failureCall, err := translateExternalToolCall(agentruntime.ToolCall{
+		ID:        "foreground-failure-over-ssh",
+		Name:      agentruntime.ToolWorkspaceShell,
+		Arguments: json.RawMessage(`{"command":"printf ssh-failure-output; exit 7","executionMode":"foreground"}`),
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failureArgs struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(failureCall.Args, &failureArgs); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	failureOutput, failureErr := runner.command(ctx, failureArgs.Command).CombinedOutput()
+	cancel()
+	exitErr, ok := failureErr.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 7 || string(failureOutput) != "ssh-failure-output" {
+		t.Fatalf("foreground SSH failure = err %v, output %q", failureErr, failureOutput)
 	}
 	visiblePTY := startPersistentSSHPTY(t, runner)
 	visiblePTY.run(t, "printf visible-pty-before")

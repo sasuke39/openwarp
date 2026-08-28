@@ -196,9 +196,11 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 		var waitUntilComplete bool
 		switch executionMode {
 		case "foreground":
-			// WarpLocal uses false to select the visible PTY path. The App's local
-			// executor still waits for real completion and never auto-backgrounds it.
-			waitUntilComplete = false
+			// Foreground means that the tool call waits for the command's real result.
+			// For managed SSH, the App uses its independent session executor for this
+			// path so stdout is returned directly instead of reconstructed from a
+			// hidden terminal block. Local terminals still render through their PTY.
+			waitUntilComplete = true
 		case "background":
 			if strings.TrimSpace(args.CommandID) == "" {
 				args.CommandID = uuid.NewString()
