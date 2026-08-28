@@ -2,10 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strconv"
@@ -21,19 +24,10 @@ import (
 // server. It runs the production background command strings through the real
 // OpenSSH client and a real remote login shell; only the host is configurable.
 func TestManagedBackgroundCommandOverRealSSH(t *testing.T) {
-	target := os.Getenv("WARPLOCAL_E2E_SSH_TARGET")
-	key := os.Getenv("WARPLOCAL_E2E_SSH_KEY")
-	portText := os.Getenv("WARPLOCAL_E2E_SSH_PORT")
-	if target == "" || key == "" || portText == "" {
-		t.Skip("set WARPLOCAL_E2E_SSH_TARGET, WARPLOCAL_E2E_SSH_KEY and WARPLOCAL_E2E_SSH_PORT")
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
-		t.Fatalf("invalid SSH port %q", portText)
-	}
+	runner := configuredRealSSHRunner(t)
 
-	runner := realSSHRunner{target: target, key: key, port: port}
 	foregroundCall, err := translateExternalToolCall(agentruntime.ToolCall{
+
 		ID:        "foreground-over-ssh",
 		Name:      agentruntime.ToolWorkspaceShell,
 		Arguments: json.RawMessage(`{"command":"printf ssh-short-ok","executionMode":"foreground"}`),
@@ -118,6 +112,67 @@ func TestManagedBackgroundCommandOverRealSSH(t *testing.T) {
 		t.Fatalf("SSH command after cancellation = %q", output)
 	}
 	visiblePTY.run(t, "printf visible-pty-after-cancel")
+}
+
+func TestSteerActiveTurnWhileRealSSHCommandRuns(t *testing.T) {
+	runner := configuredRealSSHRunner(t)
+	commandDone := make(chan struct {
+		output string
+		err    error
+	}, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		output, err := runner.command(ctx, "sleep 1; printf ssh-tool-finished").CombinedOutput()
+		commandDone <- struct {
+			output string
+			err    error
+		}{string(output), err}
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	driver := &steerRecordingDriver{}
+	server := &Server{}
+	turn := server.activeTurns.begin("ssh-warp-task", "runtime-conversation", driver)
+	mux := http.NewServeMux()
+	registerAgentControlRoutes(mux, server)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/agent/tasks/ssh-warp-task/steer",
+		bytes.NewBufferString(`{"conversation_id":"ui-conversation","prompt":"inspect logs next"}`),
+	)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("steer during SSH command status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	snapshot := turn.snapshot()
+	if driver.request.ConversationID != snapshot.ConversationID || driver.request.TurnID != snapshot.TurnID {
+		t.Fatalf("steer used non-canonical Agent Turn: %+v", driver.request)
+	}
+	result := <-commandDone
+	if result.err != nil || result.output != "ssh-tool-finished" {
+		t.Fatalf("SSH command after steer = output %q, err %v", result.output, result.err)
+	}
+	if output := runner.run(t, "printf ssh-next-exchange-ok"); output != "ssh-next-exchange-ok" {
+		t.Fatalf("SSH next exchange output = %q", output)
+	}
+}
+
+func configuredRealSSHRunner(t *testing.T) realSSHRunner {
+	t.Helper()
+	target := os.Getenv("WARPLOCAL_E2E_SSH_TARGET")
+	key := os.Getenv("WARPLOCAL_E2E_SSH_KEY")
+	portText := os.Getenv("WARPLOCAL_E2E_SSH_PORT")
+	if target == "" || key == "" || portText == "" {
+		t.Skip("set WARPLOCAL_E2E_SSH_TARGET, WARPLOCAL_E2E_SSH_KEY and WARPLOCAL_E2E_SSH_PORT")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		t.Fatalf("invalid SSH port %q", portText)
+	}
+
+	return realSSHRunner{target: target, key: key, port: port}
 }
 
 type realSSHRunner struct {

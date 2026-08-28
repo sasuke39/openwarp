@@ -34,10 +34,15 @@ type ProcessDriver struct {
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
 	pending   map[string]chan processResult
-	tasks     map[string]string
+	turns     map[string]taskIdentity // Warp task ID → canonical Agent Turn
 	exchanges map[string]string
 	closed    bool
 	done      chan struct{}
+}
+
+type taskIdentity struct {
+	ConversationID string
+	TurnID         string
 }
 
 type processResult struct {
@@ -56,7 +61,7 @@ func NewProcessDriver(cfg ProcessConfig) (*ProcessDriver, error) {
 		cfg.ShutdownTimeout = 5 * time.Second
 	}
 	return &ProcessDriver{
-		cfg: cfg, pending: make(map[string]chan processResult), tasks: make(map[string]string),
+		cfg: cfg, pending: make(map[string]chan processResult), turns: make(map[string]taskIdentity),
 		exchanges: make(map[string]string),
 	}, nil
 }
@@ -76,13 +81,29 @@ func (d *ProcessDriver) Exchange(ctx context.Context, request TurnRequest, emit 
 
 	exchangeID := uuid.NewString()
 	results := make(chan processResult, 32)
+	frameType := "turn.start"
+	if hasToolResult(request.Inputs) {
+		frameType = "turn.resume"
+	} else if isSteerOnly(request.Inputs) {
+		frameType = "turn.steer"
+	}
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
 		return fmt.Errorf("agent runtime driver is closed")
 	}
+	// Warp's UI conversation identifier can differ from the canonical
+	// conversation used to start the framework Turn. Once a task is active,
+	// resume and steer controls must follow the task ownership recorded here
+	// instead of replacing it with the UI identifier.
+	if frameType != "turn.start" {
+		if identity := d.turns[request.TaskID]; identity.ConversationID != "" {
+			request.ConversationID = identity.ConversationID
+			request.TurnID = identity.TurnID
+		}
+	}
 	d.pending[exchangeID] = results
-	d.tasks[request.TaskID] = request.ConversationID
+	d.turns[request.TaskID] = taskIdentity{ConversationID: request.ConversationID, TurnID: request.TurnID}
 	d.exchanges[exchangeID] = request.TaskID
 	d.mu.Unlock()
 	defer func() {
@@ -92,12 +113,6 @@ func (d *ProcessDriver) Exchange(ctx context.Context, request TurnRequest, emit 
 		d.mu.Unlock()
 	}()
 
-	frameType := "turn.start"
-	if hasToolResult(request.Inputs) {
-		frameType = "turn.resume"
-	} else if isSteerOnly(request.Inputs) {
-		frameType = "turn.steer"
-	}
 	envelope, err := NewEnvelope(exchangeID, frameType, request)
 	if err != nil {
 		return err
@@ -111,7 +126,7 @@ func (d *ProcessDriver) Exchange(ctx context.Context, request TurnRequest, emit 
 		case <-ctx.Done():
 			cancelCtx, cancel := context.WithTimeout(context.Background(), d.cfg.ShutdownTimeout)
 			defer cancel()
-			_ = d.Cancel(cancelCtx, request.TaskID)
+			_ = d.Cancel(cancelCtx, TurnControl{ConversationID: request.ConversationID, TurnID: request.TurnID, TaskID: request.TaskID})
 			return ctx.Err()
 		case result := <-results:
 			if result.err != nil {
@@ -123,7 +138,7 @@ func (d *ProcessDriver) Exchange(ctx context.Context, request TurnRequest, emit 
 			if result.event.IsExchangeTerminal() {
 				if result.event.Type == EventTurnCompleted || result.event.Type == EventTurnFailed || result.event.Type == EventTurnCancelled {
 					d.mu.Lock()
-					delete(d.tasks, request.TaskID)
+					delete(d.turns, request.TaskID)
 					d.mu.Unlock()
 				}
 				if result.event.Type == EventTurnFailed {
@@ -135,8 +150,8 @@ func (d *ProcessDriver) Exchange(ctx context.Context, request TurnRequest, emit 
 	}
 }
 
-func (d *ProcessDriver) Cancel(ctx context.Context, taskID string) error {
-	if strings.TrimSpace(taskID) == "" {
+func (d *ProcessDriver) Cancel(ctx context.Context, control TurnControl) error {
+	if strings.TrimSpace(control.TaskID) == "" {
 		return fmt.Errorf("task id is required")
 	}
 	if err := d.ensureStarted(); err != nil {
@@ -145,7 +160,10 @@ func (d *ProcessDriver) Cancel(ctx context.Context, taskID string) error {
 	exchangeID := uuid.NewString()
 	results := make(chan processResult, 8)
 	d.mu.Lock()
-	conversationID := d.tasks[taskID]
+	if identity := d.turns[control.TaskID]; identity.ConversationID != "" {
+		control.ConversationID = identity.ConversationID
+		control.TurnID = identity.TurnID
+	}
 	d.pending[exchangeID] = results
 	d.mu.Unlock()
 	defer func() {
@@ -153,9 +171,7 @@ func (d *ProcessDriver) Cancel(ctx context.Context, taskID string) error {
 		delete(d.pending, exchangeID)
 		d.mu.Unlock()
 	}()
-	envelope, err := NewEnvelope(exchangeID, "turn.cancel", map[string]string{
-		"task_id": taskID, "conversation_id": conversationID,
-	})
+	envelope, err := NewEnvelope(exchangeID, "turn.cancel", control)
 	if err != nil {
 		return err
 	}
@@ -172,10 +188,10 @@ func (d *ProcessDriver) Cancel(ctx context.Context, taskID string) error {
 			}
 			if result.event.Type == EventTurnCancelled {
 				d.mu.Lock()
-				delete(d.tasks, taskID)
+				delete(d.turns, control.TaskID)
 				var taskResults []chan processResult
 				for pendingID, pendingTaskID := range d.exchanges {
-					if pendingID != exchangeID && pendingTaskID == taskID {
+					if pendingID != exchangeID && pendingTaskID == control.TaskID {
 						taskResults = append(taskResults, d.pending[pendingID])
 					}
 				}
@@ -383,6 +399,9 @@ func validateTurnRequest(request TurnRequest) error {
 	}
 	if strings.TrimSpace(request.TaskID) == "" {
 		return fmt.Errorf("task id is required")
+	}
+	if strings.TrimSpace(request.TurnID) == "" {
+		return fmt.Errorf("turn id is required")
 	}
 	if strings.TrimSpace(request.RequestID) == "" {
 		return fmt.Errorf("request id is required")

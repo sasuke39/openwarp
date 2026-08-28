@@ -3,6 +3,7 @@
 ## 核心模型
 
 - [x] 明确 `Conversation -> Turn -> Exchange` 归属；同会话最多一个活跃 Turn。
+- [x] 用 Active Turn 注册表绑定 Warp Task、Conversation、Turn 与 Driver，控制请求不再采用 UI 会话 ID。
 - [ ] 统一状态：`IDLE/RUNNING/AWAITING_TOOL/CANCELLING`。
 - [ ] 统一终态：`COMPLETED/FAILED/CANCELLED`，终态后原会话可开启新 Turn。
 - [ ] 所有事件携带并校验 conversation、turn、exchange 标识，隔离迟到事件。
@@ -56,6 +57,6 @@
 - [x] Tool Result、Stop、新 Turn 并发到达时按会话顺序处理。
 - [x] 旧 Turn 的重复或迟到工具结果不会进入新 Turn。
 - [ ] 旧 Turn 的迟到模型事件不会进入新 Turn。
-- [ ] Steer 在下一 exchange 生效且不终止当前客户端命令。
+- [x] Steer 在下一 exchange 生效且不终止当前客户端命令。
 - [ ] Pi/DSH Sidecar 重启后能用相同 Session 继续已完成历史。
 - [ ] 不再出现 `already processing` 和错误的空响应判定。

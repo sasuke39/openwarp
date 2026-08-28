@@ -23,7 +23,7 @@ func (s *Server) runExternalAgent(
 	w io.Writer,
 	flusher interface{ Flush() },
 	conv *Conversation,
-	conversationID, requestID, taskID string,
+	conversationID, turnID, requestID, taskID string,
 	taskAlreadyExists bool,
 	inputs []input,
 	executionContext *pb.InputContext,
@@ -64,6 +64,7 @@ func (s *Server) runExternalAgent(
 	}
 	request := agentruntime.TurnRequest{
 		ConversationID: conversationID,
+		TurnID:         turnID,
 		TaskID:         taskID,
 		RequestID:      requestID,
 		SystemPrompt:   agent.WithExecutionContext(agent.SystemPrompt, executionContext),
@@ -126,7 +127,11 @@ func (s *Server) runExternalAgent(
 	if err := driver.Exchange(exchangeCtx, request, emit); err != nil {
 		if exchangeCtx.Err() == context.DeadlineExceeded {
 			cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if cancelErr := driver.Cancel(cancelCtx, taskID); cancelErr != nil {
+			if cancelErr := driver.Cancel(cancelCtx, agentruntime.TurnControl{
+				ConversationID: conversationID,
+				TurnID:         turnID,
+				TaskID:         taskID,
+			}); cancelErr != nil {
 				log.Printf("[RUNTIME:%s] cancel timed-out exchange task=%s: %v", driver.Name(), taskID, cancelErr)
 			}
 			cancel()

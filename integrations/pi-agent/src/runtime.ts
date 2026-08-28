@@ -18,6 +18,7 @@ interface SessionState extends ToolOwner {
   session: AgentSession
   settings: SettingsManager
   exchangeId: string
+  turnId: string
   taskId: string
   runToken: number
   sawAssistantText: boolean
@@ -53,10 +54,11 @@ export class PiAgentRuntime {
         await this.steerTurn(frame.exchange_id, frame.payload as TurnRequest)
         return
       case 'turn.cancel': {
-        const taskId = (frame.payload as { task_id?: unknown })?.task_id
+        const payload = frame.payload as { task_id?: unknown; turn_id?: unknown }
+        const taskId = payload?.task_id
         if (typeof taskId !== 'string' || taskId.length === 0) throw new Error('turn.cancel requires task_id')
         this.emitFrame(frame.exchange_id, { type: 'turn.cancelling' })
-        await this.cancelTask(taskId)
+        await this.cancelTask(taskId, typeof payload.turn_id === 'string' ? payload.turn_id : '')
         this.emitFrame(frame.exchange_id, { type: 'turn.cancelled' })
         return
       }
@@ -94,6 +96,7 @@ export class PiAgentRuntime {
   }
 
   private async startTurn(exchangeId: string, request: TurnRequest): Promise<void> {
+    if (typeof request.turn_id !== 'string' || request.turn_id.length === 0) throw new Error('turn.start requires turn_id')
     const prompt = request.inputs.filter(input => input.kind === 'user.message').map(input => input.content).join('\n\n')
     if (prompt.length === 0) throw new Error('turn.start requires a user message')
 
@@ -107,6 +110,7 @@ export class PiAgentRuntime {
     // turn authoritative and release the stale Pi prompt before starting it.
     if (state.active) await this.cancelState(state, 'Pi turn superseded by new user input')
     state.exchangeId = exchangeId
+    state.turnId = request.turn_id
     state.taskId = request.task_id
     state.workingDir = request.working_dir || state.workingDir
     state.active = true
@@ -118,6 +122,7 @@ export class PiAgentRuntime {
   private async resumeTurn(exchangeId: string, request: TurnRequest): Promise<void> {
     const state = this.sessions.get(request.conversation_id)
     if (state === undefined || !state.active) throw new Error(`conversation ${request.conversation_id} has no suspended turn`)
+    this.assertCurrentTurn(state, request)
     state.exchangeId = exchangeId
     state.taskId = request.task_id
     state.workingDir = request.working_dir || state.workingDir
@@ -140,14 +145,22 @@ export class PiAgentRuntime {
   private async steerTurn(exchangeId: string, request: TurnRequest): Promise<void> {
     const state = this.sessions.get(request.conversation_id)
     if (state === undefined || !state.active) throw new Error(`conversation ${request.conversation_id} has no running turn to steer`)
+    this.assertCurrentTurn(state, request)
     const prompt = request.inputs.filter(input => input.kind === 'user.steer').map(input => input.content).join('\n\n')
     if (prompt.length === 0) throw new Error('turn.steer requires a steering message')
     await state.session.steer(prompt)
     this.emitFrame(exchangeId, { type: 'turn.steered' })
   }
 
-  private async cancelTask(taskId: string): Promise<void> {
-    const matching = [...this.sessions.values()].filter(state => state.taskId === taskId && state.active)
+  private assertCurrentTurn(state: SessionState, request: TurnRequest): void {
+    if (typeof request.turn_id !== 'string' || request.turn_id.length === 0 || state.turnId !== request.turn_id) {
+      throw new Error(`stale turn ${request.turn_id} for conversation ${request.conversation_id}`)
+    }
+  }
+
+  private async cancelTask(taskId: string, turnId: string): Promise<void> {
+    const matching = [...this.sessions.values()].filter(state =>
+      state.taskId === taskId && state.active && (turnId.length === 0 || state.turnId === turnId))
     await Promise.all(matching.map(state => this.cancelState(state, 'Pi task was cancelled')))
   }
 
@@ -212,6 +225,7 @@ export class PiAgentRuntime {
     state.session = result.session
     state.settings = settings
     state.exchangeId = exchangeId
+    state.turnId = request.turn_id
     state.taskId = request.task_id
     state.runToken = 0
     state.sawAssistantText = false

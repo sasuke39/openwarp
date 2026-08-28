@@ -16,6 +16,7 @@ export interface RuntimeInput {
 
 export interface TurnRequest {
   conversation_id: string
+  turn_id: string
   task_id: string
   request_id: string
   system_prompt?: string

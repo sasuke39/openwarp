@@ -9,6 +9,7 @@ import (
 func TestEnvelopeRoundTrip(t *testing.T) {
 	envelope, err := NewEnvelope("exchange-1", "turn.start", TurnRequest{
 		ConversationID: "conversation-1",
+		TurnID:         "turn-1",
 		TaskID:         "task-1",
 		RequestID:      "request-1",
 		Inputs:         []Input{{Kind: InputUserMessage, Content: "hello"}},
@@ -35,6 +36,7 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 func TestValidateTurnRequest(t *testing.T) {
 	valid := TurnRequest{
 		ConversationID: "conversation-1",
+		TurnID:         "turn-1",
 		TaskID:         "task-1",
 		RequestID:      "request-1",
 		Inputs:         []Input{{Kind: InputToolResult, ToolCallID: "call-1", Content: "ok"}},
@@ -54,8 +56,8 @@ func (fakeDriver) Name() string { return "fake" }
 func (fakeDriver) Exchange(_ context.Context, _ TurnRequest, emit func(Event) error) error {
 	return emit(Event{Type: EventTurnCompleted})
 }
-func (fakeDriver) Cancel(context.Context, string) error { return nil }
-func (fakeDriver) Close(context.Context) error          { return nil }
+func (fakeDriver) Cancel(context.Context, TurnControl) error { return nil }
+func (fakeDriver) Close(context.Context) error               { return nil }
 
 func TestDriverContract(t *testing.T) {
 	var driver Driver = fakeDriver{}

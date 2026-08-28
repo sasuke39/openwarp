@@ -84,8 +84,10 @@ func (driver *mockTerminalChainDriver) Exchange(
 	}
 }
 
-func (driver *mockTerminalChainDriver) Cancel(context.Context, string) error { return nil }
-func (driver *mockTerminalChainDriver) Close(context.Context) error          { return nil }
+func (driver *mockTerminalChainDriver) Cancel(context.Context, agentruntime.TurnControl) error {
+	return nil
+}
+func (driver *mockTerminalChainDriver) Close(context.Context) error { return nil }
 
 func emitProcessTool(
 	jobID string,
@@ -158,7 +160,7 @@ func TestExternalRuntimeBackgroundCommandThroughSimulatedTerminal(t *testing.T) 
 		recorder := httptest.NewRecorder()
 		ok, active := server.runExternalAgent(
 			context.Background(), driver, recorder, recorder,
-			conversation, "conversation-mock", uuid.NewString(), "task-mock", existingTask,
+			conversation, "conversation-mock", "turn-mock", uuid.NewString(), "task-mock", existingTask,
 			inputs, nil,
 		)
 		if !ok {

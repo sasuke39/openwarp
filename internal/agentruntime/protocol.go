@@ -26,12 +26,21 @@ type Input struct {
 
 type TurnRequest struct {
 	ConversationID string            `json:"conversation_id"`
+	TurnID         string            `json:"turn_id"`
 	TaskID         string            `json:"task_id"`
 	RequestID      string            `json:"request_id"`
 	SystemPrompt   string            `json:"system_prompt,omitempty"`
 	WorkingDir     string            `json:"working_dir,omitempty"`
 	Inputs         []Input           `json:"inputs"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
+}
+
+// TurnControl identifies one active Agent Turn. TaskID is the Warp UI bridge
+// key and must never replace the canonical ConversationID or TurnID.
+type TurnControl struct {
+	ConversationID string `json:"conversation_id"`
+	TurnID         string `json:"turn_id"`
+	TaskID         string `json:"task_id"`
 }
 
 type ToolCall struct {
@@ -122,6 +131,6 @@ func (e Envelope) Validate() error {
 type Driver interface {
 	Name() string
 	Exchange(context.Context, TurnRequest, func(Event) error) error
-	Cancel(context.Context, string) error
+	Cancel(context.Context, TurnControl) error
 	Close(context.Context) error
 }
