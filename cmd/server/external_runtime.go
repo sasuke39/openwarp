@@ -191,12 +191,14 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 			}
 		}
 		if executionMode == "" {
-			executionMode = "auto"
+			return llm.ToolCall{}, fmt.Errorf("workspace.shell requires an explicit execution mode: foreground or background")
 		}
 		var waitUntilComplete bool
 		switch executionMode {
-		case "auto", "foreground":
-			waitUntilComplete = true
+		case "foreground":
+			// WarpLocal uses false to select the visible PTY path. The App's local
+			// executor still waits for real completion and never auto-backgrounds it.
+			waitUntilComplete = false
 		case "background":
 			if strings.TrimSpace(args.CommandID) == "" {
 				args.CommandID = uuid.NewString()
@@ -205,8 +207,8 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 				return llm.ToolCall{}, fmt.Errorf("background workspace.shell requires a valid UUID commandId")
 			}
 			command = managedBackgroundStartCommand(args.CommandID, command)
-			// The launcher itself is short-lived and runs through the independent
-			// session executor. The managed child continues after this completes.
+			// The launcher runs through the independent session executor. The
+			// managed child then owns its stdin/output/process lifecycle.
 			waitUntilComplete = true
 		default:
 			return llm.ToolCall{}, fmt.Errorf("unsupported workspace.shell execution mode %q", executionMode)

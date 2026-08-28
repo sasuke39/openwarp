@@ -61,3 +61,18 @@ test('Pi bash normalizes execution mode for workspace.shell', async () => {
   assert.equal(broker.deliver(call?.id ?? '', 'running'), true)
   await pending
 })
+
+test('Pi bash schema requires foreground or background execution', () => {
+  const owner: ToolOwner = {
+    conversationId: 'conversation-1', workingDir: '/srv/app', active: true,
+    emit: () => undefined,
+  }
+  const bash = createWorkspaceTools(owner, new WorkspaceToolBroker()).find(tool => tool.name === 'bash')
+  assert.ok(bash)
+  const schema = bash.parameters as { required?: string[]; properties?: Record<string, unknown> }
+  assert.ok(schema.required?.includes('execution_mode'))
+  assert.deepEqual(
+    (schema.properties?.execution_mode as { anyOf?: Array<{ const?: string }> }).anyOf?.map(option => option.const),
+    ['foreground', 'background'],
+  )
+})

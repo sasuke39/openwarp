@@ -31,7 +31,7 @@ func TestTranslateExternalToolCall(t *testing.T) {
 		wantTool string
 		contains string
 	}{
-		{"bash", agentruntime.ToolWorkspaceShell, `{"command":"pwd","workdir":"/tmp/a b"}`, "run_shell_command", `/tmp/a b`},
+		{"bash", agentruntime.ToolWorkspaceShell, `{"command":"pwd","workdir":"/tmp/a b","executionMode":"foreground"}`, "run_shell_command", `/tmp/a b`},
 		{"read", agentruntime.ToolWorkspaceReadFile, `{"file_path":"main.go","offset":5,"limit":10}`, "read_files", `"end":14`},
 		{"write", agentruntime.ToolWorkspaceWriteFile, `{"file_path":"new.txt","content":"hello"}`, "apply_file_diffs", `"new_files"`},
 		{"edit", agentruntime.ToolWorkspaceEditFile, `{"file_path":"main.go","old_string":"a","new_string":"b"}`, "apply_file_diffs", `"search":"a"`},
@@ -69,12 +69,10 @@ func TestTranslateExternalShellExecutionModes(t *testing.T) {
 		args string
 		wait bool
 	}{
-		{name: "default auto", args: `{"command":"sleep 30"}`, wait: true},
-		{name: "auto", args: `{"command":"sleep 30","executionMode":"auto"}`, wait: true},
 		{name: "background", args: `{"command":"sleep 30","executionMode":"background"}`, wait: true},
-		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: true},
+		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: false},
 		{name: "dsh legacy background", args: `{"command":"sleep 30","run_in_background":true}`, wait: true},
-		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: true},
+		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -94,6 +92,20 @@ func TestTranslateExternalShellExecutionModes(t *testing.T) {
 				t.Fatalf("wait_until_complete = %v, want %v", args.WaitUntilComplete, test.wait)
 			}
 		})
+	}
+}
+
+func TestTranslateExternalShellRequiresExplicitExecutionMode(t *testing.T) {
+	for _, args := range []string{
+		`{"command":"pwd"}`,
+		`{"command":"pwd","executionMode":"auto"}`,
+	} {
+		_, err := translateExternalToolCall(agentruntime.ToolCall{
+			ID: "call-1", Name: agentruntime.ToolWorkspaceShell, Arguments: json.RawMessage(args),
+		}, false)
+		if err == nil {
+			t.Fatalf("expected explicit execution mode error for %s", args)
+		}
 	}
 }
 
@@ -133,7 +145,7 @@ func TestTranslateExternalBackgroundShellCreatesManagedJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !args.WaitUntilComplete {
-		t.Fatal("background launcher must finish on the independent command executor")
+		t.Fatal("background launcher must use the independent session executor")
 	}
 	if !strings.Contains(args.Command, "/tmp/warplocal-agent-jobs/11111111-2222-4333-8444-555555555555") ||
 		!strings.Contains(args.Command, "status=running") {
@@ -502,6 +514,54 @@ func TestHandleCancelTaskCancelsSuspendedExternalTurn(t *testing.T) {
 	}
 	if _, ok := server.externalTasks.Load("task-suspended"); ok {
 		t.Fatal("cancelled external task must be removed")
+	}
+}
+
+type steerRecordingDriver struct {
+	request agentruntime.TurnRequest
+}
+
+func (driver *steerRecordingDriver) Name() string { return "steer-recording-runtime" }
+func (driver *steerRecordingDriver) Exchange(_ context.Context, request agentruntime.TurnRequest, emit func(agentruntime.Event) error) error {
+	driver.request = request
+	return emit(agentruntime.Event{Type: agentruntime.EventTurnSteered})
+}
+func (driver *steerRecordingDriver) Cancel(context.Context, string) error { return nil }
+func (driver *steerRecordingDriver) Close(context.Context) error          { return nil }
+
+func TestHandleSteerTaskInjectsGuidanceIntoActiveTurn(t *testing.T) {
+	driver := &steerRecordingDriver{}
+	server := &Server{}
+	server.externalTasks.Store("task-active", agentruntime.Driver(driver))
+	body := bytes.NewBufferString(`{"conversation_id":"conversation-1","prompt":"use the mirror next"}`)
+	request := httptest.NewRequest(http.MethodPost, "/agent/tasks/task-active/steer", body)
+	request.SetPathValue("task_id", "task-active")
+	recorder := httptest.NewRecorder()
+
+	server.handleSteerTask(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("steer status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if driver.request.ConversationID != "conversation-1" || driver.request.TaskID != "task-active" {
+		t.Fatalf("steer request identity = %+v", driver.request)
+	}
+	if len(driver.request.Inputs) != 1 || driver.request.Inputs[0].Kind != agentruntime.InputUserSteer || driver.request.Inputs[0].Content != "use the mirror next" {
+		t.Fatalf("steer inputs = %+v", driver.request.Inputs)
+	}
+}
+
+func TestHandleSteerTaskRejectsInactiveTurn(t *testing.T) {
+	server := &Server{}
+	body := bytes.NewBufferString(`{"conversation_id":"conversation-1","prompt":"continue"}`)
+	request := httptest.NewRequest(http.MethodPost, "/agent/tasks/missing/steer", body)
+	request.SetPathValue("task_id", "missing")
+	recorder := httptest.NewRecorder()
+
+	server.handleSteerTask(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("steer status = %d, want 409", recorder.Code)
 	}
 }
 

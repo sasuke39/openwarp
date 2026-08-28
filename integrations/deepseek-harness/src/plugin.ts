@@ -48,13 +48,13 @@ export function apply(ctx: Context, config: Config): void {
   const definitions: Array<{ name: string; description: string; parameters: ParameterSchemaSpec }> = [
     {
       name: 'bash',
-      description: 'Execute a command in the active Warp terminal. This may be a local or SSH terminal. Set run_in_background for servers and other commands that are expected to keep running.',
+      description: 'Execute a command in the active Warp terminal. You must set run_in_background=false for a foreground command or true for a persistent background command.',
       parameters: {
         command: { type: 'string', required: true },
         description: { type: 'string', required: true },
         workdir: { type: 'string' },
         timeoutMs: { type: 'number' },
-        run_in_background: { type: 'boolean' },
+        run_in_background: { type: 'boolean', required: true },
       },
     },
     {

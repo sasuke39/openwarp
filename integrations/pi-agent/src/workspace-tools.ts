@@ -98,18 +98,17 @@ export function createWorkspaceTools(owner: ToolOwner, broker: WorkspaceToolBrok
   return [
     defineTool({
       name: 'bash', label: 'Bash', promptSnippet: 'Execute shell commands in the active Warp terminal',
-      description: 'Execute a shell command in the active Warp terminal, which may be local or SSH. Use background for servers and other commands that are expected to keep running; use foreground only when the command must finish before continuing.',
+      description: 'Execute a shell command in the active Warp terminal, which may be local or SSH. You must explicitly choose foreground for commands that should finish before continuing, or background for servers and other persistent commands.',
       parameters: Type.Object({
         command: Type.String(),
         timeout: Type.Optional(Type.Number()),
-        execution_mode: Type.Optional(Type.Union([
-          Type.Literal('auto'),
+        execution_mode: Type.Union([
           Type.Literal('foreground'),
           Type.Literal('background'),
-        ])),
+        ]),
       }),
       execute: async (_id, args, signal) => {
-        const executionMode = args.execution_mode ?? 'auto'
+        const executionMode = args.execution_mode
         const arguments_: Record<string, unknown> = {
           command: args.command,
           workdir: owner.workingDir,
@@ -201,6 +200,7 @@ export function createWorkspaceTools(owner: ToolOwner, broker: WorkspaceToolBrok
       parameters: Type.Object({ path: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
       execute: async (_id, args, signal) => result(await run('workspace.shell', {
         command: `ls -la -- ${shellQuote(args.path ?? '.')}`, workdir: owner.workingDir,
+        executionMode: 'foreground',
       }, signal)),
     }),
   ]

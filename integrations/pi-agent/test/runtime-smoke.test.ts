@@ -18,7 +18,7 @@ test('Pi runtime suspends for a Warp tool and resumes the SDK session', { timeou
 				id: 'chatcmpl-tool', object: 'chat.completion.chunk', created: 1, model: 'test-model',
 				choices: [{ index: 0, delta: {
 					role: 'assistant',
-					tool_calls: [{ index: 0, id: 'pi-call-1', type: 'function', function: { name: 'bash', arguments: '{"command":"pwd"}' } }],
+					tool_calls: [{ index: 0, id: 'pi-call-1', type: 'function', function: { name: 'bash', arguments: '{"command":"pwd","execution_mode":"foreground"}' } }],
 				}, finish_reason: null }],
 			})}\n\n`)
 			response.write(`data: ${JSON.stringify({
@@ -107,7 +107,7 @@ test('Pi runtime waits for cancellation before accepting the next turn', { timeo
         id: 'chatcmpl-wait', object: 'chat.completion.chunk', created: 1, model: 'test-model',
         choices: [{ index: 0, delta: {
           role: 'assistant',
-          tool_calls: [{ index: 0, id: 'cancel-call', type: 'function', function: { name: 'bash', arguments: '{"command":"sleep 30"}' } }],
+          tool_calls: [{ index: 0, id: 'cancel-call', type: 'function', function: { name: 'bash', arguments: '{"command":"sleep 30","execution_mode":"foreground"}' } }],
         }, finish_reason: null }],
       })}\n\n`)
       response.write(`data: ${JSON.stringify({

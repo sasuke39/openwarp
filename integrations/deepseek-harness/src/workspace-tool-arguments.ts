@@ -7,12 +7,11 @@ export function workspaceToolArguments(dshName: string, raw: unknown): unknown {
   if (dshName !== 'bash' || raw === null || typeof raw !== 'object' || Array.isArray(raw)) return raw
   const args = raw as Record<string, unknown>
   const { run_in_background: runInBackground, ...rest } = args
+  if (typeof runInBackground !== 'boolean') {
+    throw new Error('bash requires run_in_background to explicitly select foreground or background execution')
+  }
   return {
     ...rest,
-    executionMode: runInBackground === true
-      ? 'background'
-      : runInBackground === false
-        ? 'foreground'
-        : 'auto',
+    executionMode: runInBackground ? 'background' : 'foreground',
   }
 }
