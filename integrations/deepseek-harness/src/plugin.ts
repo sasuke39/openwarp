@@ -48,7 +48,7 @@ export function apply(ctx: Context, config: Config): void {
   const definitions: Array<{ name: string; description: string; parameters: ParameterSchemaSpec }> = [
     {
       name: 'bash',
-      description: 'Execute a command in the active Warp terminal. You must set run_in_background=false for a foreground command or true for a persistent background command.',
+      description: 'Execute a command in the active Warp terminal. Set run_in_background=false only when it should exit within about 10 seconds and its final result is needed immediately. Set it true when it may exceed 10 seconds, is persistent, has unpredictable duration, needs parallel observation, or the user requests asynchronous execution; this includes deploys, full builds/tests, servers, watchers, and log followers. Warp creates a managed command_id: submit only the original command, never add nohup, &, or disown, and poll bash_output until exited before claiming completion.',
       parameters: {
         command: { type: 'string', required: true },
         description: { type: 'string', required: true },

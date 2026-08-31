@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -60,6 +61,23 @@ func TestTranslateExternalToolCallRejectsUnknownTool(t *testing.T) {
 	_, err := translateExternalToolCall(agentruntime.ToolCall{ID: "call-1", Name: "unknown", Arguments: json.RawMessage(`{}`)}, false)
 	if err == nil {
 		t.Fatal("expected unknown external tool to be rejected")
+	}
+}
+
+func TestTranslateExternalToolCallRejectsForegroundShellBackgroundOperator(t *testing.T) {
+	for _, command := range []string{
+		`nohup npm run deploy >deploy.log 2>&1 & echo started`,
+		`nohup npm run deploy`,
+		`npm run deploy &`,
+		`disown`,
+	} {
+		_, err := translateExternalToolCall(agentruntime.ToolCall{
+			ID: "contradictory-call", Name: agentruntime.ToolWorkspaceShell,
+			Arguments: json.RawMessage(fmt.Sprintf(`{"command":%q,"executionMode":"foreground"}`, command)),
+		}, true)
+		if err == nil || !strings.Contains(err.Error(), "executionMode=background") {
+			t.Fatalf("expected foreground/background contradiction for %q, got %v", command, err)
+		}
 	}
 }
 

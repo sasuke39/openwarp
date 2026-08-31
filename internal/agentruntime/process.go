@@ -28,16 +28,17 @@ type ProcessConfig struct {
 type ProcessDriver struct {
 	cfg ProcessConfig
 
-	startMu   sync.Mutex
-	writeMu   sync.Mutex
-	mu        sync.Mutex
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	pending   map[string]chan processResult
-	turns     map[string]taskIdentity // Warp task ID → canonical Agent Turn
-	exchanges map[string]string
-	closed    bool
-	done      chan struct{}
+	startMu    sync.Mutex
+	writeMu    sync.Mutex
+	mu         sync.Mutex
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	pending    map[string]chan processResult
+	turns      map[string]taskIdentity // Warp task ID → canonical Agent Turn
+	exchanges  map[string]string
+	closed     bool
+	done       chan struct{}
+	stderrTail []string
 }
 
 type taskIdentity struct {
@@ -284,6 +285,7 @@ func (d *ProcessDriver) ensureStarted() error {
 	d.cmd = cmd
 	d.stdin = stdin
 	d.done = make(chan struct{})
+	d.stderrTail = nil
 	done := d.done
 	d.mu.Unlock()
 	go d.readStdout(stdout)
@@ -339,17 +341,22 @@ func (d *ProcessDriver) readStdout(stdout io.Reader) {
 		}
 		d.deliver(envelope.ExchangeID, processResult{event: event})
 	}
-	err := scanner.Err()
-	if err == nil {
-		err = io.EOF
+	if err := scanner.Err(); err != nil {
+		d.failPending(fmt.Errorf("read %s runtime output: %w", d.cfg.Name, err))
 	}
-	d.failPending(fmt.Errorf("%s runtime output closed: %w", d.cfg.Name, err))
 }
 
 func (d *ProcessDriver) readStderr(stderr io.Reader) {
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
-		log.Printf("[RUNTIME:%s] %s", d.cfg.Name, scanner.Text())
+		line := scanner.Text()
+		log.Printf("[RUNTIME:%s] %s", d.cfg.Name, line)
+		d.mu.Lock()
+		d.stderrTail = append(d.stderrTail, line)
+		if len(d.stderrTail) > 20 {
+			d.stderrTail = append([]string(nil), d.stderrTail[len(d.stderrTail)-20:]...)
+		}
+		d.mu.Unlock()
 	}
 }
 
@@ -360,9 +367,18 @@ func (d *ProcessDriver) wait(cmd *exec.Cmd, done chan struct{}) {
 		d.cmd = nil
 		d.stdin = nil
 	}
+	stderrTail := strings.TrimSpace(strings.Join(d.stderrTail, "\n"))
 	d.mu.Unlock()
-	if err != nil {
+	if stderrTail != "" {
+		if err != nil {
+			d.failPending(fmt.Errorf("%s runtime exited: %w: %s", d.cfg.Name, err, stderrTail))
+		} else {
+			d.failPending(fmt.Errorf("%s runtime exited unexpectedly: %s", d.cfg.Name, stderrTail))
+		}
+	} else if err != nil {
 		d.failPending(fmt.Errorf("%s runtime exited: %w", d.cfg.Name, err))
+	} else {
+		d.failPending(fmt.Errorf("%s runtime exited unexpectedly", d.cfg.Name))
 	}
 	close(done)
 }

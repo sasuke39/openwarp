@@ -78,10 +78,11 @@ func TestManagedBackgroundCommandOverRealSSH(t *testing.T) {
 	t.Cleanup(func() { _ = runner.runAllowError("rm -rf -- " + shellQuote(managedBackgroundJobDir(jobID))) })
 
 	startTime := time.Now()
-	startOutput := runner.run(t, managedBackgroundStartCommand(
+	startCommand := managedBackgroundStartCommand(
 		jobID,
 		`read value; printf 'received=%s\n' "$value"; sleep 30`,
-	))
+	)
+	startOutput := runner.run(t, startCommand)
 	if elapsed := time.Since(startTime); elapsed > 3*time.Second {
 		t.Fatalf("background launcher blocked for %s", elapsed)
 	}
