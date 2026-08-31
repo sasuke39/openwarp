@@ -34,8 +34,8 @@ Canonical workspace calls are `workspace.shell`, `workspace.read_file`,
 `workspace.grep`. A framework plugin maps its native tool names and arguments
 to these calls; the Go transport therefore has no dependency on that framework.
 
-`workspace.shell` accepts `command`, `workdir`, and `executionMode`. The
-execution mode is `auto`, `foreground`, or `background`.
-Sidecars default omitted modes to `auto`; the adapter maps `auto` and
-`background` to Warp's monitored long-running command path, while `foreground`
-waits for completion.
+`workspace.shell` accepts `command`, `workdir`, and `executionMode`. The mode
+is required and is either `foreground` or `background`; omitted/unknown modes
+fail closed. Long or uncertain commands use `background`. If a foreground
+command outlives its observation window, the client keeps the same managed
+process and requires read/wait/cancel or explicit detach before unrelated work.
