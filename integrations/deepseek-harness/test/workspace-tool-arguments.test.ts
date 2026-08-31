@@ -20,6 +20,19 @@ test('DSH bash requires an explicit execution mode', () => {
   })
 })
 
+test('DSH rejects shell-managed background syntax declared as foreground', () => {
+  assert.throws(
+    () => workspaceToolArguments('bash', {
+      command: 'nohup npm run deploy >deploy.log 2>&1 & echo started',
+      run_in_background: false,
+    }),
+    /run_in_background=true/,
+  )
+  assert.doesNotThrow(() => workspaceToolArguments('bash', {
+    command: 'npm run deploy', run_in_background: true,
+  }))
+})
+
 test('DSH process tools normalize command ids', () => {
   assert.deepEqual(workspaceToolArguments('bash_output', { command_id: 'job-1' }), {
     commandId: 'job-1',

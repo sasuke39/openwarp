@@ -93,12 +93,19 @@ function result(content: string) {
   return { content: [{ type: 'text' as const, text: content }], details: {} }
 }
 
+export function validateShellExecutionMode(command: string, executionMode: string): void {
+  if (executionMode !== 'foreground') return
+  if (/\b(?:nohup|disown)\b/.test(command) || /(?:^|[;&|])\s*[^\n]*&(?:\s|$)/.test(command)) {
+    throw new Error('foreground bash must not start a detached/background process; remove nohup, &, and disown, then call bash with execution_mode="background"')
+  }
+}
+
 export function createWorkspaceTools(owner: ToolOwner, broker: WorkspaceToolBroker): ToolDefinition[] {
   const run = (name: string, args: unknown, signal?: AbortSignal) => broker.execute(owner, name, args, signal)
   return [
     defineTool({
       name: 'bash', label: 'Bash', promptSnippet: 'Execute shell commands in the active Warp terminal',
-      description: 'Execute a shell command in the active Warp terminal, which may be local or SSH. You must explicitly choose foreground for commands that should finish before continuing, or background for servers and other persistent commands.',
+      description: 'Execute a shell command in the active Warp terminal, which may be local or SSH. Use foreground only when the command is expected to exit within about 10 seconds and its final result is needed immediately. Use background when it may exceed 10 seconds, is persistent, has unpredictable duration, needs parallel observation, or the user requests asynchronous execution; this includes deploys, full builds/tests, servers, watchers, and log followers. Background creates a managed command_id: submit only the original command, never add nohup, &, or disown, and poll bash_output until exited before claiming completion.',
       parameters: Type.Object({
         command: Type.String(),
         timeout: Type.Optional(Type.Number()),
@@ -109,6 +116,7 @@ export function createWorkspaceTools(owner: ToolOwner, broker: WorkspaceToolBrok
       }),
       execute: async (_id, args, signal) => {
         const executionMode = args.execution_mode
+        validateShellExecutionMode(args.command, executionMode)
         const arguments_: Record<string, unknown> = {
           command: args.command,
           workdir: owner.workingDir,

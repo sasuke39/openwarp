@@ -203,6 +203,9 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 		var waitUntilComplete bool
 		switch executionMode {
 		case "foreground":
+			if shellCommandStartsBackgroundJob(args.Command) {
+				return llm.ToolCall{}, fmt.Errorf("foreground workspace.shell must not contain shell background operators; use executionMode=background without nohup, &, or disown")
+			}
 			// Foreground means that the tool call waits for the command's real result.
 			// For managed SSH, the App uses its independent session executor for this
 			// path so stdout is returned directly instead of reconstructed from a
@@ -325,6 +328,28 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 	}
 }
 
+func shellCommandStartsBackgroundJob(command string) bool {
+	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	if err != nil {
+		return false
+	}
+	found := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if stmt, ok := node.(*syntax.Stmt); ok && stmt.Background {
+			found = true
+			return false
+		}
+		if call, ok := node.(*syntax.CallExpr); ok && len(call.Args) > 0 && len(call.Args[0].Parts) == 1 {
+			if literal, ok := call.Args[0].Parts[0].(*syntax.Lit); ok && (literal.Value == "nohup" || literal.Value == "disown") {
+				found = true
+				return false
+			}
+		}
+		return !found
+	})
+	return found
+}
+
 func validateShellSyntax(command string) error {
 	if strings.TrimSpace(command) == "" {
 		return fmt.Errorf("workspace.shell command must not be empty")
@@ -349,12 +374,12 @@ func managedBackgroundStartCommand(commandID, command string) string {
 	dir := managedBackgroundJobDir(commandID)
 	// Opening the FIFO read/write avoids blocking command startup before the
 	// first input arrives, while still allowing later process.write calls.
-	worker := `exec 3<>"$1"; bash -lc "$2" <&3; code=$?; printf '%s\n' "$code" > "$3"`
+	worker := `trap '' HUP; exec 3<>"$1"; bash -lc "$2" <&3; code=$?; printf '%s\n' "$code" > "$3"`
 	return "job_dir=" + shellQuote(dir) +
 		"; mkdir -p \"$job_dir\"; rm -f \"$job_dir/input\" \"$job_dir/exit\"; mkfifo \"$job_dir/input\"; " +
 		"if command -v setsid >/dev/null 2>&1; then nohup setsid sh -c " + shellQuote(worker) +
 		" sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; " +
-		"else nohup sh -c " + shellQuote(worker) + " sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; fi " +
+		"else sh -c " + shellQuote(worker) + " sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; fi " +
 		">\"$job_dir/output\" 2>&1 </dev/null & pid=$!; printf '%s\n' \"$pid\" > \"$job_dir/pid\"; " +
 		"printf 'command_id=%s pid=%s status=running\\n' " + shellQuote(commandID) + " \"$pid\""
 }

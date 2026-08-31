@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createWorkspaceTools, WorkspaceToolBroker, type ToolOwner } from '../src/workspace-tools.js'
+import { createWorkspaceTools, validateShellExecutionMode, WorkspaceToolBroker, type ToolOwner } from '../src/workspace-tools.js'
 import type { RuntimeEvent } from '../src/protocol.js'
 
 test('broker batches calls and resumes them by id', async () => {
@@ -75,4 +75,13 @@ test('Pi bash schema requires foreground or background execution', () => {
     (schema.properties?.execution_mode as { anyOf?: Array<{ const?: string }> }).anyOf?.map(option => option.const),
     ['foreground', 'background'],
   )
+})
+
+test('Pi rejects shell-managed background syntax declared as foreground', () => {
+  assert.throws(
+    () => validateShellExecutionMode('nohup npm run deploy >deploy.log 2>&1 & echo started', 'foreground'),
+    /execution_mode="background"/,
+  )
+  assert.doesNotThrow(() => validateShellExecutionMode('npm run build', 'foreground'))
+  assert.doesNotThrow(() => validateShellExecutionMode('npm run deploy', 'background'))
 })
