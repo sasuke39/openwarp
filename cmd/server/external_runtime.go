@@ -374,7 +374,7 @@ func managedBackgroundStartCommand(commandID, command string) string {
 		"if command -v setsid >/dev/null 2>&1; then nohup setsid sh -c " + shellQuote(worker) +
 		" sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; " +
 		"else sh -c " + shellQuote(worker) + " sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; fi " +
-		">\"$job_dir/output\" 2>&1 </dev/null & pid=$!; printf '%s\n' \"$pid\" > \"$job_dir/pid\"; " +
+		">\"$job_dir/output\" 2>&1 </dev/null & pid=$!; printf '%s\n' \"$pid\" > \"$job_dir/pid\"; pgid=$(ps -o pgid= -p \"$pid\" 2>/dev/null | tr -d ' '); test -n \"$pgid\" && printf '%s\n' \"$pgid\" > \"$job_dir/pgid\"; " +
 		"printf 'command_id=%s pid=%s status=running\\n' " + shellQuote(commandID) + " \"$pid\""
 }
 
@@ -398,8 +398,8 @@ func managedBackgroundCancelCommand(commandID string) string {
 	dir := managedBackgroundJobDir(commandID)
 	return "job_dir=" + shellQuote(dir) +
 		"; test -r \"$job_dir/pid\" || { echo 'unknown command_id'; exit 1; }; pid=$(cat \"$job_dir/pid\"); " +
-		"kill -TERM -- -\"$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; " +
-		"sleep 1; kill -0 \"$pid\" 2>/dev/null && { kill -KILL -- -\"$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true; }; echo 'command cancelled'"
+		"pgid=$(cat \"$job_dir/pgid\" 2>/dev/null || printf '%s' \"$pid\"); kill -TERM -- -\"$pgid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; " +
+		"sleep 1; kill -0 \"$pid\" 2>/dev/null && { kill -KILL -- -\"$pgid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true; }; echo 'command cancelled'"
 }
 
 func externalRuntimeWorkingDir(input *pb.InputContext) string {
