@@ -212,16 +212,10 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 			// hidden terminal block. Local terminals still render through their PTY.
 			waitUntilComplete = true
 		case "background":
-			if strings.TrimSpace(args.CommandID) == "" {
-				args.CommandID = uuid.NewString()
-			}
-			if !validBackgroundCommandID(args.CommandID) {
-				return llm.ToolCall{}, fmt.Errorf("background workspace.shell requires a valid UUID commandId")
-			}
-			command = managedBackgroundStartCommand(args.CommandID, command)
-			// The launcher runs through the independent session executor. The
-			// managed child then owns its stdin/output/process lifecycle.
-			waitUntilComplete = true
+			// The client starts the original command in its managed executor and
+			// immediately returns the resulting command_id. Keeping the wrapper
+			// client-side preserves the original command in the UI.
+			waitUntilComplete = false
 		default:
 			return llm.ToolCall{}, fmt.Errorf("unsupported workspace.shell execution mode %q", executionMode)
 		}

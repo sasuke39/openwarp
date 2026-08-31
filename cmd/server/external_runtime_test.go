@@ -87,9 +87,9 @@ func TestTranslateExternalShellExecutionModes(t *testing.T) {
 		args string
 		wait bool
 	}{
-		{name: "background", args: `{"command":"sleep 30","executionMode":"background"}`, wait: true},
+		{name: "background", args: `{"command":"sleep 30","executionMode":"background"}`, wait: false},
 		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: true},
-		{name: "dsh legacy background", args: `{"command":"sleep 30","run_in_background":true}`, wait: true},
+		{name: "dsh legacy background", args: `{"command":"sleep 30","run_in_background":true}`, wait: false},
 		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: true},
 	}
 	for _, test := range tests {
@@ -147,7 +147,7 @@ func TestTranslateExternalShellRejectsIncompleteSyntax(t *testing.T) {
 	}
 }
 
-func TestTranslateExternalBackgroundShellCreatesManagedJob(t *testing.T) {
+func TestTranslateExternalBackgroundShellPreservesOriginalCommand(t *testing.T) {
 	translated, err := translateExternalToolCall(agentruntime.ToolCall{
 		ID: "background-1", Name: agentruntime.ToolWorkspaceShell,
 		Arguments: json.RawMessage(`{"command":"./start.sh","executionMode":"background","commandId":"11111111-2222-4333-8444-555555555555"}`),
@@ -162,12 +162,11 @@ func TestTranslateExternalBackgroundShellCreatesManagedJob(t *testing.T) {
 	if err := json.Unmarshal(translated.Args, &args); err != nil {
 		t.Fatal(err)
 	}
-	if !args.WaitUntilComplete {
-		t.Fatal("background launcher must use the independent session executor")
+	if args.WaitUntilComplete {
+		t.Fatal("background command must return after the client creates its managed job")
 	}
-	if !strings.Contains(args.Command, "/tmp/warplocal-agent-jobs/11111111-2222-4333-8444-555555555555") ||
-		!strings.Contains(args.Command, "status=running") {
-		t.Fatalf("managed background launcher = %s", args.Command)
+	if args.Command != "./start.sh" {
+		t.Fatalf("background command = %q, want original command", args.Command)
 	}
 	if err := validateShellSyntax(args.Command); err != nil {
 		t.Fatalf("generated launcher must be valid Bash: %v\n%s", err, args.Command)

@@ -119,6 +119,7 @@ func hasRuntimeToolResult(request agentruntime.TurnRequest, callID, content stri
 type simulatedTerminal struct {
 	independentExecutions int
 	visiblePTYWrites      int
+	jobID                 string
 }
 
 func (terminal *simulatedTerminal) executeTool(t *testing.T, call *pb.Message_ToolCall) string {
@@ -127,11 +128,15 @@ func (terminal *simulatedTerminal) executeTool(t *testing.T, call *pb.Message_To
 	if run == nil {
 		t.Fatalf("mock terminal only accepts RunShellCommand: %+v", call)
 	}
+	command := run.GetCommand()
 	if !run.GetWaitUntilComplete() {
-		t.Fatal("managed background launcher/control must use the independent session executor")
+		// Warp owns the managed-process wrapper. The Adapter forwards only the
+		// original command plus background intent so the UI never shows this
+		// transport detail.
+		command = managedBackgroundStartCommand(terminal.jobID, command)
 	}
 	terminal.independentExecutions++
-	output, err := exec.Command("bash", "-lc", run.GetCommand()).CombinedOutput()
+	output, err := exec.Command("bash", "-lc", command).CombinedOutput()
 	if err != nil {
 		return fmt.Sprintf("exit error: %v\n%s", err, output)
 	}
@@ -154,7 +159,7 @@ func TestExternalRuntimeBackgroundCommandThroughSimulatedTerminal(t *testing.T) 
 	driver := &mockTerminalChainDriver{jobID: jobID}
 	server := &Server{}
 	conversation := &Conversation{}
-	terminal := &simulatedTerminal{}
+	terminal := &simulatedTerminal{jobID: jobID}
 
 	runExchange := func(inputs []input, existingTask bool) (*httptest.ResponseRecorder, bool) {
 		recorder := httptest.NewRecorder()
