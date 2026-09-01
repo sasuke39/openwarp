@@ -37,6 +37,12 @@ type RuntimeConfig struct {
 	Args    []string `yaml:"args"`
 }
 
+// BundledAgentDrivers is the compatibility surface every built-in Agent
+// implementation must satisfy. The Agent contract matrix asserts that every
+// entry has a real runner, so adding a driver here cannot silently bypass the
+// shared lifecycle tests.
+var BundledAgentDrivers = []string{"native", "pi-agent", "deepseek-harness"}
+
 type ServerConfig struct {
 	Host                      string `yaml:"host"`
 	Port                      int    `yaml:"port"`

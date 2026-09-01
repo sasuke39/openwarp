@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,15 +64,43 @@ func TestTranslateExternalToolCallRejectsUnknownTool(t *testing.T) {
 	}
 }
 
+func TestTranslateExternalToolCallRejectsForegroundShellBackgroundOperator(t *testing.T) {
+	for _, command := range []string{
+		`nohup npm run deploy >deploy.log 2>&1 & echo started`,
+		`nohup npm run deploy`,
+		`npm run deploy &`,
+		`disown`,
+	} {
+		_, err := translateExternalToolCall(agentruntime.ToolCall{
+			ID: "contradictory-call", Name: agentruntime.ToolWorkspaceShell,
+			Arguments: json.RawMessage(fmt.Sprintf(`{"command":%q,"executionMode":"foreground"}`, command)),
+		}, true)
+		if err == nil || !strings.Contains(err.Error(), "executionMode=background") {
+			t.Fatalf("expected foreground/background contradiction for %q, got %v", command, err)
+		}
+	}
+}
+
+func TestTranslateExternalToolCallAllowsForegroundShellLogicalAndAndRedirect(t *testing.T) {
+	command := `test -r pid && kill -0 "$(cat pid)" 2>/dev/null && echo running`
+	_, err := translateExternalToolCall(agentruntime.ToolCall{
+		ID: "foreground-and", Name: agentruntime.ToolWorkspaceShell,
+		Arguments: json.RawMessage(fmt.Sprintf(`{"command":%q,"executionMode":"foreground"}`, command)),
+	}, true)
+	if err != nil {
+		t.Fatalf("valid foreground command was rejected: %v", err)
+	}
+}
+
 func TestTranslateExternalShellExecutionModes(t *testing.T) {
 	tests := []struct {
 		name string
 		args string
 		wait bool
 	}{
-		{name: "background", args: `{"command":"sleep 30","executionMode":"background"}`, wait: true},
+		{name: "background", args: `{"command":"sleep 30","executionMode":"background"}`, wait: false},
 		{name: "foreground", args: `{"command":"echo done","executionMode":"foreground"}`, wait: true},
-		{name: "dsh legacy background", args: `{"command":"sleep 30","run_in_background":true}`, wait: true},
+		{name: "dsh legacy background", args: `{"command":"sleep 30","run_in_background":true}`, wait: false},
 		{name: "dsh legacy foreground", args: `{"command":"echo done","run_in_background":false}`, wait: true},
 	}
 	for _, test := range tests {
@@ -129,7 +158,7 @@ func TestTranslateExternalShellRejectsIncompleteSyntax(t *testing.T) {
 	}
 }
 
-func TestTranslateExternalBackgroundShellCreatesManagedJob(t *testing.T) {
+func TestTranslateExternalBackgroundShellPreservesOriginalCommand(t *testing.T) {
 	translated, err := translateExternalToolCall(agentruntime.ToolCall{
 		ID: "background-1", Name: agentruntime.ToolWorkspaceShell,
 		Arguments: json.RawMessage(`{"command":"./start.sh","executionMode":"background","commandId":"11111111-2222-4333-8444-555555555555"}`),
@@ -144,12 +173,11 @@ func TestTranslateExternalBackgroundShellCreatesManagedJob(t *testing.T) {
 	if err := json.Unmarshal(translated.Args, &args); err != nil {
 		t.Fatal(err)
 	}
-	if !args.WaitUntilComplete {
-		t.Fatal("background launcher must use the independent session executor")
+	if args.WaitUntilComplete {
+		t.Fatal("background command must return after the client creates its managed job")
 	}
-	if !strings.Contains(args.Command, "/tmp/warplocal-agent-jobs/11111111-2222-4333-8444-555555555555") ||
-		!strings.Contains(args.Command, "status=running") {
-		t.Fatalf("managed background launcher = %s", args.Command)
+	if args.Command != "./start.sh" {
+		t.Fatalf("background command = %q, want original command", args.Command)
 	}
 	if err := validateShellSyntax(args.Command); err != nil {
 		t.Fatalf("generated launcher must be valid Bash: %v\n%s", err, args.Command)
@@ -215,12 +243,31 @@ func TestManagedBackgroundCommandLifecycle(t *testing.T) {
 			if !strings.Contains(string(readOutput), "helloworld") {
 				t.Fatalf("managed output was not captured: %s", readOutput)
 			}
+			for _, field := range []string{"started_at=", "finished_at=", "elapsed_seconds="} {
+				if !strings.Contains(string(readOutput), field) {
+					t.Fatalf("managed timing field %s was not captured: %s", field, readOutput)
+				}
+			}
 			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("managed command did not finish: %s", readOutput)
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func TestManagedCommandSummarySeparatesCommandMetadataAndSSHWarning(t *testing.T) {
+	command, workdir := summarizeManagedCommand("cd -- '/root' && sh -c 'echo start; sleep 40; echo end'")
+	if command != "sh -c 'echo start; sleep 40; echo end'" || workdir != "/root" {
+		t.Fatalf("unexpected display command: command=%q workdir=%q", command, workdir)
+	}
+	raw := "command_id=cmd-1 status=running started_at=1 finished_at= elapsed_seconds=30\nAUTO_START\n** WARNING: connection is not using a post-quantum key exchange algorithm.\n** This session may be vulnerable.\n** The server may need to be upgraded."
+	if got := sanitizeManagedCommandOutput(raw); got != "AUTO_START" {
+		t.Fatalf("unexpected visible output: %q", got)
+	}
+	if got := managedOutputField(raw, "elapsed_seconds"); got != "30" {
+		t.Fatalf("unexpected elapsed time: %q", got)
 	}
 }
 

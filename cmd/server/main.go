@@ -1166,19 +1166,25 @@ func summarizeToolCallResult(tc *pb.Request_Input_ToolCallResult) string {
 }
 
 func summarizeRunShellCommandResult(result *pb.RunShellCommandResult) string {
+	command, workdir := summarizeManagedCommand(result.GetCommand())
 	if finished := result.GetCommandFinished(); finished != nil {
-		output := strings.TrimSpace(finished.GetOutput())
+		output := sanitizeManagedCommandOutput(finished.GetOutput())
 		if output == "" {
 			output = "(no output)"
 		}
-		return fmt.Sprintf("Command: %s\nExit Code: %d\nOutput:\n%s", result.GetCommand(), finished.GetExitCode(), output)
+		return fmt.Sprintf("Command: %s%s\nStatus: completed\nExit Code: %d\nOutput:\n%s", command, summarizeWorkingDirectory(workdir), finished.GetExitCode(), output)
 	}
 	if snapshot := result.GetLongRunningCommandSnapshot(); snapshot != nil {
-		output := strings.TrimSpace(snapshot.GetOutput())
+		rawOutput := snapshot.GetOutput()
+		output := sanitizeManagedCommandOutput(rawOutput)
 		if output == "" {
 			output = "(no output yet)"
 		}
-		return fmt.Sprintf("Command still running: %s\nCommand ID: %s\nCurrent Output:\n%s", result.GetCommand(), snapshot.GetCommandId(), output)
+		elapsed := managedOutputField(rawOutput, "elapsed_seconds")
+		if elapsed == "" {
+			elapsed = "unknown"
+		}
+		return fmt.Sprintf("Command: %s%s\nStatus: running\nElapsed: %s seconds\nCommand ID: %s\nOutput:\n%s", command, summarizeWorkingDirectory(workdir), elapsed, snapshot.GetCommandId(), output)
 	}
 	if denied := result.GetPermissionDenied(); denied != nil {
 		return fmt.Sprintf("Command denied: %s\nReason: %s", result.GetCommand(), summarizePermissionDenied(denied))
@@ -1187,6 +1193,59 @@ func summarizeRunShellCommandResult(result *pb.RunShellCommandResult) string {
 		return fmt.Sprintf("Command: %s\nExit Code: %d\nOutput:\n%s", result.GetCommand(), result.GetExitCode(), strings.TrimSpace(result.GetOutput()))
 	}
 	return fmt.Sprintf("Command finished: %s", result.GetCommand())
+}
+
+func summarizeManagedCommand(command string) (string, string) {
+	const prefix = "cd -- '"
+	if !strings.HasPrefix(command, prefix) {
+		return command, ""
+	}
+	rest := strings.TrimPrefix(command, prefix)
+	directory, original, ok := strings.Cut(rest, "' && ")
+	if !ok {
+		return command, ""
+	}
+	return original, strings.ReplaceAll(directory, `'"'"'`, `'`)
+}
+
+func summarizeWorkingDirectory(workdir string) string {
+	if workdir == "" {
+		return ""
+	}
+	return "\nWorking Directory: " + workdir
+}
+
+func managedOutputField(output, name string) string {
+	prefix := name + "="
+	for _, line := range strings.Split(output, "\n") {
+		for _, field := range strings.Fields(line) {
+			if value, ok := strings.CutPrefix(field, prefix); ok {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func sanitizeManagedCommandOutput(output string) string {
+	lines := strings.Split(output, "\n")
+	visible := make([]string, 0, len(lines))
+	hidingSSHWarning := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "** WARNING: connection is not using a post-quantum") {
+			hidingSSHWarning = true
+			continue
+		}
+		if hidingSSHWarning && strings.HasPrefix(line, "**") {
+			continue
+		}
+		hidingSSHWarning = false
+		if strings.Contains(line, "command_id=") && strings.Contains(line, "status=") && strings.Contains(line, "elapsed_seconds=") {
+			continue
+		}
+		visible = append(visible, line)
+	}
+	return strings.TrimSpace(strings.Join(visible, "\n"))
 }
 
 func summarizePermissionDenied(denied *pb.PermissionDenied) string {

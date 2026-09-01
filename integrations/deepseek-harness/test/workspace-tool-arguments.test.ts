@@ -20,6 +20,16 @@ test('DSH bash requires an explicit execution mode', () => {
   })
 })
 
+test('DSH delegates shell syntax classification to the Adapter AST', () => {
+  assert.doesNotThrow(() => workspaceToolArguments('bash', {
+    command: 'test -r pid && kill -0 "$(cat pid)" 2>/dev/null',
+    run_in_background: false,
+  }))
+  assert.doesNotThrow(() => workspaceToolArguments('bash', {
+    command: 'npm run deploy', run_in_background: true,
+  }))
+})
+
 test('DSH process tools normalize command ids', () => {
   assert.deepEqual(workspaceToolArguments('bash_output', { command_id: 'job-1' }), {
     commandId: 'job-1',

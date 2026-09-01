@@ -10,6 +10,9 @@ export function workspaceToolArguments(dshName: string, raw: unknown): unknown {
   if (typeof runInBackground !== 'boolean') {
     throw new Error('bash requires run_in_background to explicitly select foreground or background execution')
   }
+  // Bash syntax and real background nodes are validated once in the Go
+  // Adapter with mvdan's AST. A Sidecar regex cannot reliably distinguish a
+  // background `&` from normal operators such as `&&`.
   return {
     ...rest,
     executionMode: runInBackground ? 'background' : 'foreground',

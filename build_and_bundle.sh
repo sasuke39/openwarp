@@ -13,7 +13,9 @@ export PATH="$HOME/.cargo/bin:$HOME/go/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WARP_SRC="${WARP_SRC:-}"
-BUNDLE_DIR="$SCRIPT_DIR/WarpLocal.app"
+# Keep the default release location, but allow a named preview bundle so UI work can be
+# opened side-by-side without replacing the user's installed App.
+BUNDLE_DIR="${WARPLOCAL_BUNDLE_DIR:-$SCRIPT_DIR/WarpLocal.app}"
 ASSETS_DIR="$SCRIPT_DIR/assets"
 GO_CACHE_DIR="$SCRIPT_DIR/.gocache"
 GO_TMP_DIR="$SCRIPT_DIR/.gotmp"
@@ -41,20 +43,37 @@ fi
 
 echo "Using WARP_SRC=$WARP_SRC"
 
-NODE_BIN="$(command -v node || true)"
+NODE_BIN="${WARPLOCAL_NODE_BIN:-$(command -v node || true)}"
 if [[ -z "$NODE_BIN" ]]; then
   echo "Node.js is required to bundle the Pi and DeepSeek Harness runtimes."
   exit 1
 fi
 
-echo "=== Step 1/6: Building Agent runtime Sidecars ==="
+NODE_VERSION="$($NODE_BIN -p 'process.versions.node' 2>/dev/null || true)"
+NODE_MAJOR="${NODE_VERSION%%.*}"
+NODE_MINOR="$(printf '%s' "$NODE_VERSION" | cut -d. -f2)"
+if [[ ! "$NODE_MAJOR" =~ ^[0-9]+$ ]] || [[ ! "$NODE_MINOR" =~ ^[0-9]+$ ]] \
+  || ! (( NODE_MAJOR >= 24 || (NODE_MAJOR == 22 && NODE_MINOR >= 19) )); then
+  echo "Node.js ^22.19 or >=24 is required by every bundled Agent runtime; got ${NODE_VERSION:-unknown} from $NODE_BIN."
+  echo "Set WARPLOCAL_NODE_BIN to a supported Node executable."
+  exit 1
+fi
+echo "Using Node.js $NODE_VERSION from $NODE_BIN"
+
+echo "=== Step 1/7: Building Agent runtime Sidecars ==="
 for runtime_dir in "$SCRIPT_DIR/integrations/pi-agent" "$SCRIPT_DIR/integrations/deepseek-harness"; do
   echo "  -> $(basename "$runtime_dir")"
   (cd "$runtime_dir" && npm ci --silent && npm run build --silent)
 done
 
 echo ""
-echo "=== Step 2/6: Building warp-local-adapter (Go server) ==="
+echo "=== Step 2/7: Running the cross-framework Agent contract matrix ==="
+cd "$SCRIPT_DIR"
+WARPLOCAL_CONTRACT_NODE="$NODE_BIN" go test ./cmd/server \
+  -run '^(TestEveryBundledAgentHasContractRunner|TestAgentContractMatrix)$' -count=1
+
+echo ""
+echo "=== Step 3/7: Building warp-local-adapter (Go server) ==="
 cd "$SCRIPT_DIR"
 mkdir -p "$SCRIPT_DIR/bin" "$GO_CACHE_DIR" "$GO_TMP_DIR"
 GOCACHE="$GO_CACHE_DIR" GOTMPDIR="$GO_TMP_DIR" GOFLAGS="-buildvcs=false" \
@@ -62,13 +81,13 @@ GOCACHE="$GO_CACHE_DIR" GOTMPDIR="$GO_TMP_DIR" GOFLAGS="-buildvcs=false" \
 echo "  -> bin/warp-local-adapter"
 
 echo ""
-echo "=== Step 3/6: Building warp (WarpLocal client binary) ==="
+echo "=== Step 4/7: Building warp (WarpLocal client binary) ==="
 cd "$WARP_SRC"
 cargo build --bin warp --features skip_firebase_anonymous_user,ssh_drag_and_drop
 echo "  -> target/debug/warp"
 
 echo ""
-echo "=== Step 4/6: Creating app bundle ==="
+echo "=== Step 5/7: Creating app bundle ==="
 mkdir -p "$BUNDLE_DIR/Contents/MacOS"
 mkdir -p "$BUNDLE_DIR/Contents/Helpers"
 mkdir -p "$BUNDLE_DIR/Contents/Resources"
@@ -164,7 +183,7 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" << 'PLIST'
 PLIST
 
 echo ""
-echo "=== Step 5/6: Signing app bundle ==="
+echo "=== Step 6/7: Signing app bundle ==="
 SIGNING_IDENTITY="${WARPLOCAL_SIGNING_IDENTITY:-}"
 if [[ -z "$SIGNING_IDENTITY" ]]; then
   SIGNING_IDENTITY="$(
@@ -183,7 +202,7 @@ fi
 codesign --verify --deep --strict "$BUNDLE_DIR"
 
 echo ""
-echo "=== Step 6/6: Registering URL scheme ==="
+echo "=== Step 7/7: Registering URL scheme ==="
 LSREGISTER=$(find /System/Library/Frameworks/CoreServices.framework -name lsregister 2>/dev/null | head -1)
 "$LSREGISTER" -f "$BUNDLE_DIR" 2>/dev/null || true
 

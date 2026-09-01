@@ -203,22 +203,19 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 		var waitUntilComplete bool
 		switch executionMode {
 		case "foreground":
+			if shellCommandStartsBackgroundJob(args.Command) {
+				return llm.ToolCall{}, fmt.Errorf("foreground workspace.shell must not contain shell background operators; use executionMode=background without nohup, &, or disown")
+			}
 			// Foreground means that the tool call waits for the command's real result.
 			// For managed SSH, the App uses its independent session executor for this
 			// path so stdout is returned directly instead of reconstructed from a
 			// hidden terminal block. Local terminals still render through their PTY.
 			waitUntilComplete = true
 		case "background":
-			if strings.TrimSpace(args.CommandID) == "" {
-				args.CommandID = uuid.NewString()
-			}
-			if !validBackgroundCommandID(args.CommandID) {
-				return llm.ToolCall{}, fmt.Errorf("background workspace.shell requires a valid UUID commandId")
-			}
-			command = managedBackgroundStartCommand(args.CommandID, command)
-			// The launcher runs through the independent session executor. The
-			// managed child then owns its stdin/output/process lifecycle.
-			waitUntilComplete = true
+			// The client starts the original command in its managed executor and
+			// immediately returns the resulting command_id. Keeping the wrapper
+			// client-side preserves the original command in the UI.
+			waitUntilComplete = false
 		default:
 			return llm.ToolCall{}, fmt.Errorf("unsupported workspace.shell execution mode %q", executionMode)
 		}
@@ -325,6 +322,28 @@ func translateExternalToolCall(call agentruntime.ToolCall, managedSSH bool) (llm
 	}
 }
 
+func shellCommandStartsBackgroundJob(command string) bool {
+	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	if err != nil {
+		return false
+	}
+	found := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if stmt, ok := node.(*syntax.Stmt); ok && stmt.Background {
+			found = true
+			return false
+		}
+		if call, ok := node.(*syntax.CallExpr); ok && len(call.Args) > 0 && len(call.Args[0].Parts) == 1 {
+			if literal, ok := call.Args[0].Parts[0].(*syntax.Lit); ok && (literal.Value == "nohup" || literal.Value == "disown") {
+				found = true
+				return false
+			}
+		}
+		return !found
+	})
+	return found
+}
+
 func validateShellSyntax(command string) error {
 	if strings.TrimSpace(command) == "" {
 		return fmt.Errorf("workspace.shell command must not be empty")
@@ -349,22 +368,24 @@ func managedBackgroundStartCommand(commandID, command string) string {
 	dir := managedBackgroundJobDir(commandID)
 	// Opening the FIFO read/write avoids blocking command startup before the
 	// first input arrives, while still allowing later process.write calls.
-	worker := `exec 3<>"$1"; bash -lc "$2" <&3; code=$?; printf '%s\n' "$code" > "$3"`
+	worker := `trap '' HUP; exec 3<>"$1"; bash -lc "$2" <&3; code=$?; date +%s > "$4"; printf '%s\n' "$code" > "$3"`
 	return "job_dir=" + shellQuote(dir) +
-		"; mkdir -p \"$job_dir\"; rm -f \"$job_dir/input\" \"$job_dir/exit\"; mkfifo \"$job_dir/input\"; " +
+		"; mkdir -p \"$job_dir\"; rm -f \"$job_dir/input\" \"$job_dir/exit\" \"$job_dir/finished_at\"; date +%s > \"$job_dir/started_at\"; mkfifo \"$job_dir/input\"; " +
 		"if command -v setsid >/dev/null 2>&1; then nohup setsid sh -c " + shellQuote(worker) +
-		" sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; " +
-		"else nohup sh -c " + shellQuote(worker) + " sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; fi " +
-		">\"$job_dir/output\" 2>&1 </dev/null & pid=$!; printf '%s\n' \"$pid\" > \"$job_dir/pid\"; " +
-		"printf 'command_id=%s pid=%s status=running\\n' " + shellQuote(commandID) + " \"$pid\""
+		" sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\" \"$job_dir/finished_at\" " +
+		">\"$job_dir/output\" 2>&1 </dev/null & pid=$!; printf '%s\n' \"$pid\" > \"$job_dir/pgid\"; " +
+		"else sh -c " + shellQuote(worker) + " sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\" \"$job_dir/finished_at\" >\"$job_dir/output\" 2>&1 </dev/null & pid=$!; rm -f \"$job_dir/pgid\"; fi; " +
+		"printf '%s\n' \"$pid\" > \"$job_dir/pid\"; " +
+		"started_at=$(cat \"$job_dir/started_at\"); printf 'command_id=%s pid=%s status=running started_at=%s finished_at= elapsed_seconds=0\\n' " + shellQuote(commandID) + " \"$pid\" \"$started_at\""
 }
 
 func managedBackgroundReadCommand(commandID string) string {
 	dir := managedBackgroundJobDir(commandID)
 	return "job_dir=" + shellQuote(dir) +
 		"; test -r \"$job_dir/pid\" || { echo 'unknown command_id'; exit 1; }; pid=$(cat \"$job_dir/pid\"); " +
-		"if kill -0 \"$pid\" 2>/dev/null; then _warplocal_status=running; elif test -r \"$job_dir/exit\"; then _warplocal_status=exited:$(cat \"$job_dir/exit\"); else _warplocal_status=stopped; fi; " +
-		"printf 'command_id=%s pid=%s status=%s\\n' " + shellQuote(commandID) + " \"$pid\" \"$_warplocal_status\"; tail -c 65536 \"$job_dir/output\" 2>/dev/null || true"
+		"if test -r \"$job_dir/exit\"; then _warplocal_status=exited:$(cat \"$job_dir/exit\"); elif kill -0 \"$pid\" 2>/dev/null; then _warplocal_status=running; else _warplocal_status=stopped; fi; " +
+		"started_at=$(cat \"$job_dir/started_at\" 2>/dev/null || date +%s); finished_at=$(cat \"$job_dir/finished_at\" 2>/dev/null || true); now=$(date +%s); end=${finished_at:-$now}; elapsed=$((end-started_at)); " +
+		"printf 'command_id=%s pid=%s status=%s started_at=%s finished_at=%s elapsed_seconds=%s\\n' " + shellQuote(commandID) + " \"$pid\" \"$_warplocal_status\" \"$started_at\" \"$finished_at\" \"$elapsed\"; tail -c 65536 \"$job_dir/output\" 2>/dev/null || true"
 }
 
 func managedBackgroundWriteCommand(commandID, input string) string {
@@ -379,8 +400,9 @@ func managedBackgroundCancelCommand(commandID string) string {
 	dir := managedBackgroundJobDir(commandID)
 	return "job_dir=" + shellQuote(dir) +
 		"; test -r \"$job_dir/pid\" || { echo 'unknown command_id'; exit 1; }; pid=$(cat \"$job_dir/pid\"); " +
-		"kill -TERM -- -\"$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; " +
-		"sleep 1; kill -0 \"$pid\" 2>/dev/null && { kill -KILL -- -\"$pid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true; }; echo 'command cancelled'"
+		"pgid=$(cat \"$job_dir/pgid\" 2>/dev/null || printf '%s' \"$pid\"); kill -TERM -- -\"$pgid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; " +
+		"sleep 1; kill -0 \"$pid\" 2>/dev/null && { kill -KILL -- -\"$pgid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true; }; test -r \"$job_dir/finished_at\" || date +%s > \"$job_dir/finished_at\"; " +
+		"started_at=$(cat \"$job_dir/started_at\" 2>/dev/null || date +%s); finished_at=$(cat \"$job_dir/finished_at\"); elapsed=$((finished_at-started_at)); printf 'command_id=%s pid=%s status=stopped started_at=%s finished_at=%s elapsed_seconds=%s\\ncommand cancelled\\n' " + shellQuote(commandID) + " \"$pid\" \"$started_at\" \"$finished_at\" \"$elapsed\""
 }
 
 func externalRuntimeWorkingDir(input *pb.InputContext) string {
