@@ -25,7 +25,7 @@ Prerequisites:
 Build:
 
 ```bash
-git clone https://github.com/sasuke39/open-warp.git
+git clone https://github.com/sasuke39/openwarp.git
 cd open-warp
 WARP_SRC=/path/to/warp-source sh ./build_and_bundle.sh
 open ./WarpLocal.app

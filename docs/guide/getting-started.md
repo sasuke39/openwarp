@@ -6,7 +6,7 @@
 
 Download the latest `WarpLocal.app.zip` from:
 
-https://github.com/sasuke39/open-warp/releases
+https://github.com/sasuke39/openwarp/releases
 
 Unzip it, move `WarpLocal.app` to `/Applications`, then open it.
 
@@ -24,7 +24,7 @@ sh ./install.sh
 
 ## Configure your provider
 
-Open `WarpLocal.app`, then choose `Local Adapter Settings...` from the app menu.
+Open `WarpLocal.app`, then choose **Settings → Local Adapter**.
 
 Fill in the fields shown in the settings window:
 

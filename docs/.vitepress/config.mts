@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'open-warp',
   description: 'Use your own OpenAI-compatible LLM provider inside Warp.',
-  base: '/open-warp/',
+  base: '/openwarp/',
   cleanUrls: true,
   head: [
     ['meta', { name: 'theme-color', content: '#111827' }],
@@ -44,7 +44,7 @@ export default defineConfig({
       ]
     },
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/sasuke39/open-warp' }
+      { icon: 'github', link: 'https://github.com/sasuke39/openwarp' }
     ],
     footer: {
       message: 'Released under the MIT License.',

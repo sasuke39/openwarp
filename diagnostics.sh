@@ -6,7 +6,7 @@
 #
 # Usage:
 #   ./diagnostics.sh
-#   bash <(curl -fsSL https://raw.githubusercontent.com/sasuke39/open-warp/main/diagnostics.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/sasuke39/openwarp/main/diagnostics.sh)
 
 set -euo pipefail
 
@@ -298,7 +298,7 @@ Please review before posting. Do not add secrets back.
 
 ---
 
-*Paste this summary into a [bug report](https://github.com/sasuke39/open-warp/issues/new?template=bug_report.yml). Attach the full diagnostics folder if possible.*
+*Paste this summary into a [bug report](https://github.com/sasuke39/openwarp/issues/new?template=bug_report.yml). Attach the full diagnostics folder if possible.*
 SUMMARY
 
 # ── Write README.txt ──
@@ -322,7 +322,7 @@ Privacy:
   Please review files before uploading. Do NOT add secrets back.
 
 How to report:
-  1. Open https://github.com/sasuke39/open-warp/issues/new?template=bug_report.yml
+  1. Open https://github.com/sasuke39/openwarp/issues/new?template=bug_report.yml
   2. Copy the contents of issue-summary.md into the "Diagnostics summary" field
   3. Optionally attach this entire folder as a zip
 README
@@ -334,4 +334,4 @@ echo "Files:"
 ls -1 "$out_dir"
 echo ""
 info "Next: open the issue template and paste the summary:"
-info "  https://github.com/sasuke39/open-warp/issues/new?template=bug_report.yml"
+info "  https://github.com/sasuke39/openwarp/issues/new?template=bug_report.yml"

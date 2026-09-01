@@ -6,7 +6,7 @@
 
 从 GitHub 发布页下载最新的 `WarpLocal.app.zip`：
 
-https://github.com/sasuke39/open-warp/releases
+https://github.com/sasuke39/openwarp/releases
 
 解压后，把 `WarpLocal.app` 移动到 `/Applications` 并打开。
 

@@ -17,7 +17,7 @@ sh install.sh doctor
 bash /Applications/WarpLocal.app/Contents/Resources/diagnostics.sh
 
 # Option 2: One-line download and run
-bash <(curl -fsSL https://raw.githubusercontent.com/sasuke39/open-warp/main/diagnostics.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/sasuke39/openwarp/main/diagnostics.sh)
 ```
 
 This generates a folder on your Desktop containing:
@@ -30,14 +30,11 @@ This generates a folder on your Desktop containing:
 | `crash-report.txt` | Key segments from macOS crash reports (redacted) |
 | `README.txt` | Instructions |
 
-All API keys, tokens, email addresses, and home directory paths are automatically redacted. Review the files before uploading.
-
-Then open a [bug report](https://github.com/sasuke39/open-warp/issues/new?template=bug_report.yml) and paste `issue-summary.md` into the diagnostics field.
+All API keys, tokens, email addresses, and home directory paths are automatically redacted. Review the files before uploading. Then open a [bug report](https://github.com/sasuke39/openwarp/issues/new?template=bug_report.yml) and paste `issue-summary.md` into the diagnostics field.
 
 ## macOS says the app is damaged
 
 The app is currently unsigned. If it was downloaded through a browser, macOS may add a quarantine attribute.
-
 ```bash
 xattr -cr /Applications/WarpLocal.app
 ```
