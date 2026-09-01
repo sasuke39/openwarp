@@ -10,10 +10,9 @@ export function workspaceToolArguments(dshName: string, raw: unknown): unknown {
   if (typeof runInBackground !== 'boolean') {
     throw new Error('bash requires run_in_background to explicitly select foreground or background execution')
   }
-  const command = typeof args.command === 'string' ? args.command : ''
-  if (!runInBackground && (/\b(?:nohup|disown)\b/.test(command) || /(?:^|[;&|])\s*[^\n]*&(?:\s|$)/.test(command))) {
-    throw new Error('foreground bash must not start a detached/background process; remove nohup, &, and disown, then set run_in_background=true')
-  }
+  // Bash syntax and real background nodes are validated once in the Go
+  // Adapter with mvdan's AST. A Sidecar regex cannot reliably distinguish a
+  // background `&` from normal operators such as `&&`.
   return {
     ...rest,
     executionMode: runInBackground ? 'background' : 'foreground',

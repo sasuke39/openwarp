@@ -295,16 +295,24 @@ function attachToolSocket(socket: Socket): void {
         }
         continue
       }
-      for (const call of message.calls) callOwners.set(call.id, socket)
-      writeEvent(state.exchangeId, {
-        type: 'tool.call.batch',
-        tool_calls: message.calls.map(call => ({
-          id: call.id,
-          name: workspaceToolName(call.name),
-          arguments: workspaceToolArguments(call.name, call.arguments),
-        })),
-      })
-      writeEvent(state.exchangeId, { type: 'turn.awaiting_tool' })
+      const toolCalls = []
+      for (const call of message.calls) {
+        try {
+          toolCalls.push({
+            id: call.id,
+            name: workspaceToolName(call.name),
+            arguments: workspaceToolArguments(call.name, call.arguments),
+          })
+          callOwners.set(call.id, socket)
+        } catch (error) {
+          const content = error instanceof Error ? error.message : String(error)
+          socket.write(`${JSON.stringify({ type: 'tool.result', id: call.id, content, is_error: true })}\n`)
+        }
+      }
+      if (toolCalls.length > 0) {
+        writeEvent(state.exchangeId, { type: 'tool.call.batch', tool_calls: toolCalls })
+        writeEvent(state.exchangeId, { type: 'turn.awaiting_tool' })
+      }
     }
   })
 	socket.on('close', () => {

@@ -20,14 +20,11 @@ test('DSH bash requires an explicit execution mode', () => {
   })
 })
 
-test('DSH rejects shell-managed background syntax declared as foreground', () => {
-  assert.throws(
-    () => workspaceToolArguments('bash', {
-      command: 'nohup npm run deploy >deploy.log 2>&1 & echo started',
-      run_in_background: false,
-    }),
-    /run_in_background=true/,
-  )
+test('DSH delegates shell syntax classification to the Adapter AST', () => {
+  assert.doesNotThrow(() => workspaceToolArguments('bash', {
+    command: 'test -r pid && kill -0 "$(cat pid)" 2>/dev/null',
+    run_in_background: false,
+  }))
   assert.doesNotThrow(() => workspaceToolArguments('bash', {
     command: 'npm run deploy', run_in_background: true,
   }))

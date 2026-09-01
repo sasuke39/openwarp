@@ -77,11 +77,9 @@ test('Pi bash schema requires foreground or background execution', () => {
   )
 })
 
-test('Pi rejects shell-managed background syntax declared as foreground', () => {
-  assert.throws(
-    () => validateShellExecutionMode('nohup npm run deploy >deploy.log 2>&1 & echo started', 'foreground'),
-    /execution_mode="background"/,
-  )
+test('Pi delegates shell syntax classification to the Adapter AST', () => {
+  assert.doesNotThrow(() =>
+    validateShellExecutionMode('test -r pid && kill -0 "$(cat pid)" 2>/dev/null', 'foreground'))
   assert.doesNotThrow(() => validateShellExecutionMode('npm run build', 'foreground'))
   assert.doesNotThrow(() => validateShellExecutionMode('npm run deploy', 'background'))
 })

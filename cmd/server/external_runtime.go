@@ -368,22 +368,24 @@ func managedBackgroundStartCommand(commandID, command string) string {
 	dir := managedBackgroundJobDir(commandID)
 	// Opening the FIFO read/write avoids blocking command startup before the
 	// first input arrives, while still allowing later process.write calls.
-	worker := `trap '' HUP; exec 3<>"$1"; bash -lc "$2" <&3; code=$?; printf '%s\n' "$code" > "$3"`
+	worker := `trap '' HUP; exec 3<>"$1"; bash -lc "$2" <&3; code=$?; date +%s > "$4"; printf '%s\n' "$code" > "$3"`
 	return "job_dir=" + shellQuote(dir) +
-		"; mkdir -p \"$job_dir\"; rm -f \"$job_dir/input\" \"$job_dir/exit\"; mkfifo \"$job_dir/input\"; " +
+		"; mkdir -p \"$job_dir\"; rm -f \"$job_dir/input\" \"$job_dir/exit\" \"$job_dir/finished_at\"; date +%s > \"$job_dir/started_at\"; mkfifo \"$job_dir/input\"; " +
 		"if command -v setsid >/dev/null 2>&1; then nohup setsid sh -c " + shellQuote(worker) +
-		" sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; " +
-		"else sh -c " + shellQuote(worker) + " sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\"; fi " +
-		">\"$job_dir/output\" 2>&1 </dev/null & pid=$!; printf '%s\n' \"$pid\" > \"$job_dir/pid\"; pgid=$(ps -o pgid= -p \"$pid\" 2>/dev/null | tr -d ' '); test -n \"$pgid\" && printf '%s\n' \"$pgid\" > \"$job_dir/pgid\"; " +
-		"printf 'command_id=%s pid=%s status=running\\n' " + shellQuote(commandID) + " \"$pid\""
+		" sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\" \"$job_dir/finished_at\" " +
+		">\"$job_dir/output\" 2>&1 </dev/null & pid=$!; printf '%s\n' \"$pid\" > \"$job_dir/pgid\"; " +
+		"else sh -c " + shellQuote(worker) + " sh \"$job_dir/input\" " + shellQuote(command) + " \"$job_dir/exit\" \"$job_dir/finished_at\" >\"$job_dir/output\" 2>&1 </dev/null & pid=$!; rm -f \"$job_dir/pgid\"; fi; " +
+		"printf '%s\n' \"$pid\" > \"$job_dir/pid\"; " +
+		"started_at=$(cat \"$job_dir/started_at\"); printf 'command_id=%s pid=%s status=running started_at=%s finished_at= elapsed_seconds=0\\n' " + shellQuote(commandID) + " \"$pid\" \"$started_at\""
 }
 
 func managedBackgroundReadCommand(commandID string) string {
 	dir := managedBackgroundJobDir(commandID)
 	return "job_dir=" + shellQuote(dir) +
 		"; test -r \"$job_dir/pid\" || { echo 'unknown command_id'; exit 1; }; pid=$(cat \"$job_dir/pid\"); " +
-		"if kill -0 \"$pid\" 2>/dev/null; then _warplocal_status=running; elif test -r \"$job_dir/exit\"; then _warplocal_status=exited:$(cat \"$job_dir/exit\"); else _warplocal_status=stopped; fi; " +
-		"printf 'command_id=%s pid=%s status=%s\\n' " + shellQuote(commandID) + " \"$pid\" \"$_warplocal_status\"; tail -c 65536 \"$job_dir/output\" 2>/dev/null || true"
+		"if test -r \"$job_dir/exit\"; then _warplocal_status=exited:$(cat \"$job_dir/exit\"); elif kill -0 \"$pid\" 2>/dev/null; then _warplocal_status=running; else _warplocal_status=stopped; fi; " +
+		"started_at=$(cat \"$job_dir/started_at\" 2>/dev/null || date +%s); finished_at=$(cat \"$job_dir/finished_at\" 2>/dev/null || true); now=$(date +%s); end=${finished_at:-$now}; elapsed=$((end-started_at)); " +
+		"printf 'command_id=%s pid=%s status=%s started_at=%s finished_at=%s elapsed_seconds=%s\\n' " + shellQuote(commandID) + " \"$pid\" \"$_warplocal_status\" \"$started_at\" \"$finished_at\" \"$elapsed\"; tail -c 65536 \"$job_dir/output\" 2>/dev/null || true"
 }
 
 func managedBackgroundWriteCommand(commandID, input string) string {
@@ -399,7 +401,8 @@ func managedBackgroundCancelCommand(commandID string) string {
 	return "job_dir=" + shellQuote(dir) +
 		"; test -r \"$job_dir/pid\" || { echo 'unknown command_id'; exit 1; }; pid=$(cat \"$job_dir/pid\"); " +
 		"pgid=$(cat \"$job_dir/pgid\" 2>/dev/null || printf '%s' \"$pid\"); kill -TERM -- -\"$pgid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true; " +
-		"sleep 1; kill -0 \"$pid\" 2>/dev/null && { kill -KILL -- -\"$pgid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true; }; echo 'command cancelled'"
+		"sleep 1; kill -0 \"$pid\" 2>/dev/null && { kill -KILL -- -\"$pgid\" 2>/dev/null || kill -KILL \"$pid\" 2>/dev/null || true; }; test -r \"$job_dir/finished_at\" || date +%s > \"$job_dir/finished_at\"; " +
+		"started_at=$(cat \"$job_dir/started_at\" 2>/dev/null || date +%s); finished_at=$(cat \"$job_dir/finished_at\"); elapsed=$((finished_at-started_at)); printf 'command_id=%s pid=%s status=stopped started_at=%s finished_at=%s elapsed_seconds=%s\\ncommand cancelled\\n' " + shellQuote(commandID) + " \"$pid\" \"$started_at\" \"$finished_at\" \"$elapsed\""
 }
 
 func externalRuntimeWorkingDir(input *pb.InputContext) string {

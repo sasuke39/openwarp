@@ -81,6 +81,17 @@ func TestTranslateExternalToolCallRejectsForegroundShellBackgroundOperator(t *te
 	}
 }
 
+func TestTranslateExternalToolCallAllowsForegroundShellLogicalAndAndRedirect(t *testing.T) {
+	command := `test -r pid && kill -0 "$(cat pid)" 2>/dev/null && echo running`
+	_, err := translateExternalToolCall(agentruntime.ToolCall{
+		ID: "foreground-and", Name: agentruntime.ToolWorkspaceShell,
+		Arguments: json.RawMessage(fmt.Sprintf(`{"command":%q,"executionMode":"foreground"}`, command)),
+	}, true)
+	if err != nil {
+		t.Fatalf("valid foreground command was rejected: %v", err)
+	}
+}
+
 func TestTranslateExternalShellExecutionModes(t *testing.T) {
 	tests := []struct {
 		name string
@@ -232,12 +243,31 @@ func TestManagedBackgroundCommandLifecycle(t *testing.T) {
 			if !strings.Contains(string(readOutput), "helloworld") {
 				t.Fatalf("managed output was not captured: %s", readOutput)
 			}
+			for _, field := range []string{"started_at=", "finished_at=", "elapsed_seconds="} {
+				if !strings.Contains(string(readOutput), field) {
+					t.Fatalf("managed timing field %s was not captured: %s", field, readOutput)
+				}
+			}
 			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("managed command did not finish: %s", readOutput)
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func TestManagedCommandSummarySeparatesCommandMetadataAndSSHWarning(t *testing.T) {
+	command, workdir := summarizeManagedCommand("cd -- '/root' && sh -c 'echo start; sleep 40; echo end'")
+	if command != "sh -c 'echo start; sleep 40; echo end'" || workdir != "/root" {
+		t.Fatalf("unexpected display command: command=%q workdir=%q", command, workdir)
+	}
+	raw := "command_id=cmd-1 status=running started_at=1 finished_at= elapsed_seconds=30\nAUTO_START\n** WARNING: connection is not using a post-quantum key exchange algorithm.\n** This session may be vulnerable.\n** The server may need to be upgraded."
+	if got := sanitizeManagedCommandOutput(raw); got != "AUTO_START" {
+		t.Fatalf("unexpected visible output: %q", got)
+	}
+	if got := managedOutputField(raw, "elapsed_seconds"); got != "30" {
+		t.Fatalf("unexpected elapsed time: %q", got)
 	}
 }
 

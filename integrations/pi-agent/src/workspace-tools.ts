@@ -94,10 +94,10 @@ function result(content: string) {
 }
 
 export function validateShellExecutionMode(command: string, executionMode: string): void {
-  if (executionMode !== 'foreground') return
-  if (/\b(?:nohup|disown)\b/.test(command) || /(?:^|[;&|])\s*[^\n]*&(?:\s|$)/.test(command)) {
-    throw new Error('foreground bash must not start a detached/background process; remove nohup, &, and disown, then call bash with execution_mode="background"')
-  }
+  // The Go Adapter validates Bash syntax and real background nodes using
+  // mvdan's AST. The Sidecar only owns tool schema normalization.
+  void command
+  void executionMode
 }
 
 export function createWorkspaceTools(owner: ToolOwner, broker: WorkspaceToolBroker): ToolDefinition[] {
