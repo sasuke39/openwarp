@@ -89,10 +89,10 @@ func TestWithExecutionContextIdentifiesManagedSSHSession(t *testing.T) {
 				RootPath: ManagedSSHContextRoot,
 				AdditionalRuleFilePaths: []string{
 					"profile_id:test-profile",
-					"host:47.115.32.237",
+					"host:192.0.2.10",
 					"port:22",
 					"username:root",
-					"session_hostname:iZwz94kqmvp7aaxi22dsh5Z",
+					"session_hostname:demo-host",
 					"session_username:root",
 				},
 			},
@@ -102,8 +102,8 @@ func TestWithExecutionContextIdentifiesManagedSSHSession(t *testing.T) {
 	prompt := withExecutionContext("base", input, "darwin")
 
 	for _, want := range []string{
-		"Managed SSH target: root@47.115.32.237:22",
-		"Remote session hostname: iZwz94kqmvp7aaxi22dsh5Z",
+		"Managed SSH target: root@192.0.2.10:22",
+		"Remote session hostname: demo-host",
 		"already connected",
 		"Never run ssh to the same managed host",
 	} {

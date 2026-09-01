@@ -4,13 +4,13 @@ import "testing"
 
 func TestRedundantSSHHostBlocksManagedHost(t *testing.T) {
 	target := ManagedSSHTarget{
-		Host:            "47.115.32.237",
-		SessionHostname: "iZwz94kqmvp7aaxi22dsh5Z",
+		Host:            "192.0.2.10",
+		SessionHostname: "demo-host",
 	}
 	commands := []string{
-		`ssh root@47.115.32.237 "pwd"`,
-		`env DISPLAY=x ssh -p 22 -o 'ServerAliveInterval=30' root@47.115.32.237`,
-		`command ssh root@iZwz94kqmvp7aaxi22dsh5Z`,
+		`ssh root@192.0.2.10 "pwd"`,
+		`env DISPLAY=x ssh -p 22 -o 'ServerAliveInterval=30' root@192.0.2.10`,
+		`command ssh root@demo-host`,
 		`printf ok; /usr/bin/ssh localhost`,
 	}
 	for _, command := range commands {

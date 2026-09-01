@@ -397,14 +397,14 @@ func TestWorkspaceRootFromRequestIgnoresManagedSSHRuntimeContext(t *testing.T) {
 
 func TestEnforceManagedSSHPolicyBlocksSameHostAndAllowsDifferentHost(t *testing.T) {
 	target := agent.ManagedSSHTarget{
-		Host:            "47.115.32.237",
-		SessionHostname: "iZwz94kqmvp7aaxi22dsh5Z",
+		Host:            "192.0.2.10",
+		SessionHostname: "demo-host",
 	}
 	toolCalls := []llm.ToolCall{
 		{
 			ID:   "same-host",
 			Name: "run_shell_command",
-			Args: json.RawMessage(`{"command":"ssh root@47.115.32.237 'pwd'"}`),
+			Args: json.RawMessage(`{"command":"ssh root@192.0.2.10 'pwd'"}`),
 		},
 		{
 			ID:   "different-host",
@@ -424,13 +424,13 @@ func TestEnforceManagedSSHPolicyBlocksSameHostAndAllowsDifferentHost(t *testing.
 }
 
 func TestEnforceManagedSSHPolicyBlocksTransferForPendingSameHostSSH(t *testing.T) {
-	target := agent.ManagedSSHTarget{Host: "47.115.32.237"}
+	target := agent.ManagedSSHTarget{Host: "192.0.2.10"}
 	history := []openai.ChatCompletionMessageParamUnion{
 		llm.MakeAssistantToolCallMessage([]llm.ToolCall{
 			{
 				ID:   "shell-call",
 				Name: "run_shell_command",
-				Args: json.RawMessage(`{"command":"ssh root@47.115.32.237 'pwd'"}`),
+				Args: json.RawMessage(`{"command":"ssh root@192.0.2.10 'pwd'"}`),
 			},
 		}, ""),
 	}
