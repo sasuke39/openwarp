@@ -11,7 +11,7 @@ hero:
       link: /zh/guide/getting-started
     - theme: alt
       text: 查看 GitHub
-      link: https://github.com/sasuke39/open-warp
+      link: https://github.com/sasuke39/openwarp
 
 features:
   - title: 本地优先
@@ -37,4 +37,4 @@ Warp 开源了客户端，但 AI 后端仍然由官方云服务控制。`open-wa
 
 `open-warp` 已经可以覆盖核心编码链路：提问、读文件、搜索、跑命令、应用文件改动、继续处理工具结果。它目前不追求完整复刻 Warp 官方后端。
 
-如果这个项目对你有帮助，欢迎给 [sasuke39/open-warp](https://github.com/sasuke39/open-warp) 一个收藏，这会帮助我们继续完善更多工具和发布体验。
+如果这个项目对你有帮助，欢迎给 [sasuke39/openwarp](https://github.com/sasuke39/openwarp) 一个收藏，这会帮助我们继续完善更多工具和发布体验。

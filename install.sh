@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-REPO="https://github.com/sasuke39/open-warp"
+REPO="https://github.com/sasuke39/openwarp"
 INSTALL_DIR="/Applications"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -137,7 +137,7 @@ run_doctor() {
     else
         # Fallback: download and run from GitHub
         info "diagnostics.sh not found locally, downloading..."
-        bash <(curl -fsSL https://raw.githubusercontent.com/sasuke39/open-warp/main/diagnostics.sh)
+        bash <(curl -fsSL https://raw.githubusercontent.com/sasuke39/openwarp/main/diagnostics.sh)
     fi
 }
 

@@ -11,7 +11,7 @@ hero:
       link: /guide/getting-started
     - theme: alt
       text: View on GitHub
-      link: https://github.com/sasuke39/open-warp
+      link: https://github.com/sasuke39/openwarp
 
 features:
   - title: Local by design
@@ -37,4 +37,4 @@ The project ships two parts:
 
 `open-warp` is usable for the core coding loop: ask, inspect files, search, run commands, apply diffs, and continue with tool results. It does not yet aim for complete Warp backend parity.
 
-If this project helps you, please star [sasuke39/open-warp](https://github.com/sasuke39/open-warp). That signal helps guide future tool support and release work.
+If this project helps you, please star [sasuke39/openwarp](https://github.com/sasuke39/openwarp). That signal helps guide future tool support and release work.

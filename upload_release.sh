@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RELEASE_DIR="$SCRIPT_DIR/release"
 APP_PATH="$SCRIPT_DIR/WarpLocal.app"
-REPO="sasuke39/open-warp"
+REPO="sasuke39/openwarp"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'

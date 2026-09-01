@@ -52,7 +52,7 @@ open /Applications/WarpLocal.app
 
 ## 文档
 
-[快速开始](https://sasuke39.github.io/open-warp/guide/getting-started) · [配置](https://sasuke39.github.io/open-warp/guide/configuration) · [工具](https://sasuke39.github.io/open-warp/guide/supported-tools) · [故障排查](https://sasuke39.github.io/open-warp/guide/troubleshooting) · [构建指南](./WARP_CLIENT.md)
+[快速开始](https://sasuke39.github.io/openwarp/zh/guide/getting-started) · [配置](https://sasuke39.github.io/openwarp/zh/guide/configuration) · [工具](https://sasuke39.github.io/openwarp/zh/guide/supported-tools) · [故障排查](https://sasuke39.github.io/openwarp/zh/guide/troubleshooting) · [构建指南](./WARP_CLIENT.md)
 
 ## 开发
 

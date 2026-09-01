@@ -52,7 +52,7 @@ The core Agent loop and managed shell lifecycle are usable. MCP, subagents, comp
 
 ## Documentation
 
-[Getting started](https://sasuke39.github.io/open-warp/guide/getting-started) · [Configuration](https://sasuke39.github.io/open-warp/guide/configuration) · [Supported tools](https://sasuke39.github.io/open-warp/guide/supported-tools) · [Troubleshooting](https://sasuke39.github.io/open-warp/guide/troubleshooting) · [Build guide](./WARP_CLIENT.md)
+[Getting started](https://sasuke39.github.io/openwarp/guide/getting-started) · [Configuration](https://sasuke39.github.io/openwarp/guide/configuration) · [Supported tools](https://sasuke39.github.io/openwarp/guide/supported-tools) · [Troubleshooting](https://sasuke39.github.io/openwarp/guide/troubleshooting) · [Build guide](./WARP_CLIENT.md)
 
 ## Development
 
