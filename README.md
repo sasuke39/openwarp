@@ -3,7 +3,7 @@
 <h1 align="center">open-warp</h1>
 <p align="center">Bring your own model and Agent harness to a local-first Warp experience.</p>
 <p align="center">
-  <a href="https://github.com/sasuke39/open-warp/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/sasuke39/open-warp"></a>
+  <a href="https://github.com/sasuke39/openwarp/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/sasuke39/openwarp"></a>
   <img alt="macOS Apple Silicon" src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple">
   <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
 </p>
@@ -28,7 +28,7 @@
 
 ## Install
 
-Download **[WarpLocal.app.zip](https://github.com/sasuke39/open-warp/releases/latest/download/WarpLocal.app.zip)** from the latest release, unzip it, and move `WarpLocal.app` to `/Applications`.
+Download **[WarpLocal.app.zip](https://github.com/sasuke39/openwarp/releases/latest/download/WarpLocal.app.zip)** from the latest release, unzip it, and move `WarpLocal.app` to `/Applications`.
 
 ```bash
 xattr -cr /Applications/WarpLocal.app

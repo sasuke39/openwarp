@@ -3,7 +3,7 @@
 <h1 align="center">open-warp</h1>
 <p align="center">在本地优先的 Warp 体验中使用自己的模型和 Agent 框架。</p>
 <p align="center">
-  <a href="https://github.com/sasuke39/open-warp/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/sasuke39/open-warp"></a>
+  <a href="https://github.com/sasuke39/openwarp/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/sasuke39/openwarp"></a>
   <img alt="macOS Apple Silicon" src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple">
   <a href="./LICENSE"><img alt="MIT 协议" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
 </p>
@@ -28,7 +28,7 @@
 
 ## 安装
 
-从最新发布页下载 **[WarpLocal.app.zip](https://github.com/sasuke39/open-warp/releases/latest/download/WarpLocal.app.zip)**，解压后将 `WarpLocal.app` 移到 `/Applications`。
+从最新发布页下载 **[WarpLocal.app.zip](https://github.com/sasuke39/openwarp/releases/latest/download/WarpLocal.app.zip)**，解压后将 `WarpLocal.app` 移到 `/Applications`。
 
 ```bash
 xattr -cr /Applications/WarpLocal.app
