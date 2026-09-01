@@ -6,7 +6,7 @@ Runtime configuration is stored locally. For bundled apps, the default path is:
 ~/Library/Application Support/WarpLocal/config.yaml
 ```
 
-For normal use, open `WarpLocal.app` and choose `Local Adapter Settings...` from the app menu. The local web endpoint exists behind that menu, but users usually do not need to visit it directly.
+For normal use, open `WarpLocal.app` and choose **Settings → Local Adapter**. The local web endpoint exists behind that page, but users usually do not need to visit it directly.
 
 ## Example
 

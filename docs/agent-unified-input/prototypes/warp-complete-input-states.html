@@ -19,19 +19,19 @@
 <body>
 <div class="app">
   <header class="titlebar"><div class="traffic"><i></i><i></i><i></i></div><div class="search">Search sessions, agents, files…</div><div class="top-actions">＋　⌁　●</div></header>
-  <aside class="sidebar"><div class="side-search"><span>Search tabs…</span><span>⌘　＋</span></div><div class="tab"><div class="ico">›_</div><div>claude --enable-auto-mode<small>~</small></div><div>⋮</div></div><div class="tab active"><div class="ico">✣</div><div>服务器检查<small>root@47.115.32.237</small></div><div>⋮</div></div><div class="section">Settings</div><div class="tab"><div class="ico">○</div><div>Settings</div><div></div></div><div class="section">SSH</div><div class="tab"><div class="ico">›_</div><div>aicus服务器<small class="on">已连接 · lh_zdhk</small></div><div>⋮</div></div><div class="tab"><div class="ico">›_</div><div>47.115.32.237<small class="on">已连接 · root</small></div><div>⋮</div></div></aside>
+  <aside class="sidebar"><div class="side-search"><span>Search tabs…</span><span>⌘　＋</span></div><div class="tab"><div class="ico">›_</div><div>local workspace<small>~/workspace/demo</small></div><div>⋮</div></div><div class="tab active"><div class="ico">✣</div><div>部署检查<small>developer@dev-server</small></div><div>⋮</div></div><div class="section">Settings</div><div class="tab"><div class="ico">○</div><div>Settings</div><div></div></div><div class="section">SSH</div><div class="tab"><div class="ico">›_</div><div>staging-server<small class="on">已连接 · developer</small></div><div>⋮</div></div><div class="tab"><div class="ico">›_</div><div>dev-server<small class="on">已连接 · developer</small></div><div>⋮</div></div></aside>
   <main class="main">
-    <section class="scroll"><div class="crumb">root@47.115.32.237:/root</div><div class="flow">
-      <div class="term-block"><div class="term-head"><span>~　(0.021s)</span><span>10:42:08</span></div><div class="term-command">ls -la</div><div class="term-output">drwx------  8 root root     4096 Aug 29 10:42 .
-drwxr-xr-x  5 root root     4096 Aug 29 09:31 workspace
--rw-r--r--  1 root root 43892117 Aug 29 10:11 backend.jar</div><div class="term-foot">Lines: 3　·　Exit 0　·　Terminal command</div></div>
+    <section class="scroll"><div class="crumb">developer@dev-server:/workspace/demo</div><div class="flow">
+      <div class="term-block"><div class="term-head"><span>~　(0.021s)</span><span>10:42:08</span></div><div class="term-command">ls -la</div><div class="term-output">drwxr-xr-x  8 developer staff     256 Aug 29 10:42 .
+drwxr-xr-x  5 developer staff     160 Aug 29 09:31 workspace
+-rw-r--r--  1 developer staff 43892117 Aug 29 10:11 backend.jar</div><div class="term-foot">Lines: 3　·　Exit 0　·　Terminal command</div></div>
       <div class="agent-turn"><div class="user"><div class="avatar">U</div><div class="prompt">分析一下刚才目录里有哪些部署文件</div><div class="route-label">AGENT</div></div><div class="assistant">我会结合刚才的终端结果，检查文件类型和空间占用。</div><div class="tool-row"><span class="spinner"></span><span>file backend.jar; du -sh backend.jar workspace</span><span class="elapsed">00:06</span><span class="stop">■ 停止</span></div><div class="running-note">Agent 正在执行当前 Turn</div><div class="answer-old">终端命令和 Agent Turn 按发生顺序出现在同一滚动区域。</div></div>
-      <div class="term-block"><div class="term-head"><span>~　(0.012s)</span><span>10:42:31</span></div><div class="term-command">pwd</div><div class="term-output">/root</div><div class="term-foot">Lines: 1　·　Exit 0　·　Terminal command</div></div>
+      <div class="term-block"><div class="term-head"><span>~　(0.012s)</span><span>10:42:31</span></div><div class="term-command">pwd</div><div class="term-output">/workspace/demo</div><div class="term-foot">Lines: 1　·　Exit 0　·　Terminal command</div></div>
     </div></section>
     <section class="composer-wrap">
       <div class="input-head"><div class="mode"><span id="modeIcon" class="mode-icon">›_</span><strong id="modeTitle">终端命令</strong><span id="modeDetail" class="mode-detail">直接在当前 SSH 终端执行</span></div><div class="manual">识别不正确？<b id="switchLabel">切换为 Agent</b></div></div>
       <div id="inputText" class="input-body">df -h /</div>
-      <div class="input-foot"><div class="chips"><span class="chip">▱ /root</span><span class="chip">SSH · 47.115.32.237</span><span class="chip">auto</span></div><div id="submitArea"><span class="submit-terminal">Enter　直接执行，不影响正在运行的 Agent　↵</span></div></div>
+      <div class="input-foot"><div class="chips"><span class="chip">▱ /workspace/demo</span><span class="chip">SSH · dev-server</span><span class="chip">Pi Agent · demo-model</span></div><div id="submitArea"><span class="submit-terminal">Enter　直接执行，不影响正在运行的 Agent　↵</span></div></div>
     </section>
   </main>
 </div>

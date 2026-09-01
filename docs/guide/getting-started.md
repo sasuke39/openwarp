@@ -24,7 +24,7 @@ sh ./install.sh
 
 ## Configure your provider
 
-Open `WarpLocal.app`, then choose `Local Adapter Settings...` from the app menu.
+Open `WarpLocal.app`, then choose **Settings → Local Adapter**.
 
 Fill in the fields shown in the settings window:
 

@@ -1,157 +1,64 @@
-# open-warp
+<p align="right"><a href="./README.md">English</a></p>
+<p align="center"><img src="./docs/public/logo.svg" width="88" alt="open-warp 标志"></p>
+<h1 align="center">open-warp</h1>
+<p align="center">在本地优先的 Warp 体验中使用自己的模型和 Agent 框架。</p>
+<p align="center">
+  <a href="https://github.com/sasuke39/open-warp/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/sasuke39/open-warp"></a>
+  <img alt="macOS Apple Silicon" src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple">
+  <a href="./LICENSE"><img alt="MIT 协议" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
+</p>
 
-在 Warp 里使用你自己的大语言模型。`open-warp` 是一个本地开源适配器，可以让打过补丁的 Warp 终端连接任意 OpenAI 兼容接口，包括 OpenAI、DeepSeek、Ollama、OpenRouter、LM Studio、vLLM 等。
+`open-warp` 将修改后的 Warp 客户端连接到本机 Go Adapter，并支持任意 OpenAI 兼容接口。它可以和官方 Warp 同时安装，`WarpLocal.app` 使用独立的本地配置与运行数据。
 
-**工作原理：** WarpLocal 对 Warp 客户端打补丁，将 AI 请求路由到本地 Go 服务，而不是 Warp 云端。这个本地服务会把 Warp 的 protobuf 协议转换成 OpenAI 兼容接口请求，执行已支持的本地工具，并把结果流式返回给客户端。
+<table>
+  <tr><td><img src="./docs/agent-unified-input/prototypes/warp-complete-agent.png" alt="Agent 与终端统一时间线"></td><td><img src="./docs/agent-unified-input/prototypes/warp-complete-terminal.png" alt="终端输入模式"></td></tr>
+  <tr><td align="center">Agent 与终端事件出现在同一时间线</td><td align="center">Agent 运行时仍可直接使用终端</td></tr>
+</table>
 
-文档站：[https://sasuke39.github.io/open-warp/zh/](https://sasuke39.github.io/open-warp/zh/)
+<p align="center"><sub>脱敏界面预览：其中的主机、用户、路径和模型名称均为虚构数据。</sub></p>
 
-## 特性
+## 核心功能
 
-- 支持任意 OpenAI 兼容接口，包括 OpenAI、DeepSeek、Ollama、OpenRouter、vLLM、LM Studio
-- 开箱即用的 `WarpLocal.app`，双击即可启动，无需命令行
-- 内置本地设置界面，可配置服务商、接口密钥和模型
-- 中文输入支持，中文、日文、韩文会自动识别为 AI 查询
-- 可与官方 Warp 并存使用
-
-## 已支持工具
-
-`read_files` · `grep` · `file_glob` · `file_glob_v2` · `run_shell_command` · `read_shell_command_output` · `transfer_shell_command_control_to_user` · `apply_file_diffs` · `search_codebase`
-
-尚未支持：MCP 工具、子代理、计算机操作、被动建议。
+- **自带模型服务**：支持 OpenAI、DeepSeek、Ollama、OpenRouter、LM Studio、vLLM 等 OpenAI 兼容接口。
+- **可切换 Agent 框架**：支持 Native、Pi Agent、DeepSeek Harness，并可为 Profile 独立选择模型。
+- **本地与受管 SSH 工具**：保留工作目录和远端上下文，可读文件、搜代码、应用修改和执行命令。
+- **受管命令生命周期**：显式前台/后台模式，提供 `command_id`、输出读取、输入、停止、退出状态和执行器计时。
+- **不中断当前 Turn**：输入可排队为下一次 Follow-up，也可 Steer 当前 Turn，不会重复创建响应流。
+- **原生设置页面**：在 WarpLocal 内管理服务商、模型、上下文长度、Agent 框架和 Profile。
 
 ## 安装
 
-### 方式一：下载发布包（推荐）
+从最新发布页下载 **[WarpLocal.app.zip](https://github.com/sasuke39/open-warp/releases/latest/download/WarpLocal.app.zip)**，解压后将 `WarpLocal.app` 移到 `/Applications`。
 
 ```bash
-sh ./install.sh
+xattr -cr /Applications/WarpLocal.app
+open /Applications/WarpLocal.app
 ```
 
-从 [GitHub 发布页](https://github.com/sasuke39/open-warp/releases) 下载最新的 `WarpLocal.app` 并安装。
+当前预编译版本支持 **Apple Silicon（arm64）**，使用开发签名；Windows 完整安装包尚未提供。
 
-> **macOS 提示应用已损坏？** 从浏览器直接下载的未签名应用可能会被系统拦截。运行以下命令清除隔离标记即可：
-> ```bash
-> xattr -cr /Applications/WarpLocal.app
-> ```
-> 使用 `sh ./install.sh` 安装会自动处理，不会出现此问题。
+## 配置与使用
 
-### 方式二：从源码构建
+1. 打开 **设置 → Local Adapter**。
+2. 添加接口地址、API Key、模型和上下文长度，并选择 Agent 框架。
+3. 打开本地或 SSH 终端，输入 Agent 指令。
+4. 需要直接控制 Shell 时，可在同一输入区域切回终端模式。
 
-前置条件：Go 1.22+、Rust 工具链、Warp 源码（v0.2026.04.29）
+配置和运行数据保存在本机 WarpLocal 的 Application Support 目录中；提示词、工具上下文和 API 凭据只发送给你配置的模型服务。诊断包会隐藏密钥、Token、邮箱和用户目录，但分享前仍应人工检查。
 
-```bash
-# 1. 克隆本仓库
-git clone https://github.com/sasuke39/open-warp.git
-cd open-warp
+## 项目状态
 
-# 2. 构建 WarpLocal.app
-WARP_SRC=/path/to/warp-source sh ./build_and_bundle.sh
-open ./WarpLocal.app
-```
+核心 Agent 工作流和受管命令生命周期已经可用。MCP、子代理、计算机操作、被动建议和完整 Warp 云端能力尚未实现。本项目是独立社区项目，与 Warp 官方无隶属关系。
 
-完整补丁与构建指南见 **[WARP_CLIENT.md](./WARP_CLIENT.md)**。
+## 文档
 
-## 如何使用
-
-1. **启动** `WarpLocal.app`
-2. **打开设置**：在应用菜单中点击 `Local Adapter Settings...`
-3. **填写模型服务**：选择服务商，并填入接口地址、接口密钥和模型名称
-4. **保存配置**：本地适配器会自动热重载，不需要完整重启应用
-5. **开始使用**：回到 WarpLocal，按 `Cmd+K`，直接用自然语言让终端帮你工作
-
-示例：
-
-```text
-分析当前目录
-解释这个报错并给出修复建议
-创建一个简单的文本文件
-找一下服务端入口，并总结它的工作流程
-```
-
-`WarpLocal.app` 会自动启动本地适配器辅助进程。正常使用时，不需要你手动启动单独的服务。
-
-## 配置
-
-运行时配置存储在 `config.yaml`（打包应用为 `~/Library/Application Support/WarpLocal/config.yaml`）。
-
-```yaml
-provider: openai-compatible
-base_url: https://api.openai.com/v1
-api_key: YOUR_API_KEY
-model: gpt-4.1-mini
-server:
-  host: 127.0.0.1
-  port: 18888
-```
-
-正常使用时，通过 `Local Adapter Settings...` 配置即可。YAML 文件主要用于调试或自动化场景。
-
-## 仓库结构
-
-```text
-├── cmd/server/                 # Go HTTP 服务器（本地适配器）
-├── internal/agent/             # 系统提示词
-├── internal/config/            # 配置加载
-├── internal/llm/               # OpenAI 兼容模型客户端
-├── internal/proto/             # 生成的 Go protobuf 文件
-├── internal/tools/             # 本地工具实现
-├── patches/                    # Warp 客户端补丁
-├── assets/                     # 应用图标
-├── build_and_bundle.sh         # macOS WarpLocal.app 打包脚本
-├── install.sh                  # 一键安装脚本
-├── WARP_CLIENT.md              # 完整补丁与构建指南
-```
-
-## Warp 客户端补丁
-
-`patches/` 目录包含 Warp 客户端补丁：
-
-| 补丁 | 作用 |
-|------|------|
-| 0001 | `WarpServerConfig::local_adapter()` — 将请求路由到 `127.0.0.1:18888` |
-| 0002 | `Channel::Local` 入口 — 激活本地适配器配置 |
-| 0003 | 跳过 Firebase 认证 — 本地适配器不需要云端认证 |
-| 0004 | 中文自然语言检测 — 中文/日文/韩文输入识别为 AI 查询 |
-| 0005 | Warp UI 中添加 "Local Adapter Settings..." 菜单项 |
-| 0006 | 本地构建跳过首次引导流程 |
-| 0007 | 退出 WarpLocal 时优雅停止本地适配器辅助进程 |
-
-各补丁详情见 **[WARP_CLIENT.md](./WARP_CLIENT.md)**。
-
-## 应用包结构
-
-```
-WarpLocal.app/
-└── Contents/
-    ├── MacOS/warp                # WarpLocal 主程序
-    ├── Helpers/warp-local-adapter # Go AI 后端服务
-    └── Resources/
-        ├── config.example.yaml
-        └── iconfile.icns
-```
-
-Warp 客户端会管理本地适配器服务的生命周期，自动启动辅助进程并保持运行。
+[快速开始](https://sasuke39.github.io/open-warp/guide/getting-started) · [配置](https://sasuke39.github.io/open-warp/guide/configuration) · [工具](https://sasuke39.github.io/open-warp/guide/supported-tools) · [故障排查](https://sasuke39.github.io/open-warp/guide/troubleshooting) · [构建指南](./WARP_CLIENT.md)
 
 ## 开发
 
 ```bash
 go test ./...
-gofmt -w ./cmd ./internal
+WARP_SRC=/path/to/warp-source sh ./build_and_bundle.sh
 ```
 
-## 路线图
-
-1. 原生 Warp 设置页面（替代网页设置界面）
-2. `ask_user_question` 工具支持
-3. 更好的 `apply_file_diffs` 失败报告
-4. 改善长时间运行命令的行为
-5. CI 自动化发布
-
-## 收藏趋势
-
-[![收藏趋势图](https://api.star-history.com/svg?repos=sasuke39/open-warp&type=Date)](https://star-history.com/#sasuke39/open-warp&Date)
-
-## 开源协议
-
-MIT。详见 [LICENSE](./LICENSE)。
+项目采用 MIT 协议，详见 [LICENSE](./LICENSE)。

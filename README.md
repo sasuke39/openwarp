@@ -1,176 +1,64 @@
-# open-warp
+<p align="right"><a href="./README_CN.md">简体中文</a></p>
+<p align="center"><img src="./docs/public/logo.svg" width="88" alt="open-warp logo"></p>
+<h1 align="center">open-warp</h1>
+<p align="center">Bring your own model and Agent harness to a local-first Warp experience.</p>
+<p align="center">
+  <a href="https://github.com/sasuke39/open-warp/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/sasuke39/open-warp"></a>
+  <img alt="macOS Apple Silicon" src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple">
+  <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
+</p>
 
-Run your own LLM inside Warp. `open-warp` is a local, open-source adapter that connects a patched Warp terminal to any OpenAI-compatible provider, including OpenAI, DeepSeek, Ollama, OpenRouter, LM Studio, vLLM, and more.
+`open-warp` connects a patched Warp client to a local Go adapter and any OpenAI-compatible endpoint. The official Warp app can remain installed; `WarpLocal.app` uses separate local configuration and runtime state.
 
-**How it works:** WarpLocal patches the Warp client to route AI requests to a local Go server instead of Warp's cloud backend. The server translates Warp's protobuf protocol into OpenAI-compatible API calls, executes supported local tools, and streams responses back to the client.
+<table>
+  <tr><td><img src="./docs/agent-unified-input/prototypes/warp-complete-agent.png" alt="Agent and terminal timeline"></td><td><img src="./docs/agent-unified-input/prototypes/warp-complete-terminal.png" alt="Terminal input mode"></td></tr>
+  <tr><td align="center">Agent and terminal events in one timeline</td><td align="center">Terminal commands stay available during an Agent Turn</td></tr>
+</table>
 
-Documentation: [https://sasuke39.github.io/open-warp/](https://sasuke39.github.io/open-warp/)
+<p align="center"><sub>Sanitized UI preview — all hosts, users, paths, and model names are fictional.</sub></p>
 
-## Features
+## Core features
 
-- Works with any OpenAI-compatible endpoint, including OpenAI, DeepSeek, Ollama, OpenRouter, vLLM, and LM Studio
-- Drop-in `WarpLocal.app`: double-click to launch, no command line required
-- Built-in local settings UI for provider, API key, and model configuration
-- CJK input support: Chinese, Japanese, and Korean text is recognized as AI queries
-- Coexists with the official Warp app
-
-## Supported Tools
-
-`read_files` · `grep` · `file_glob` · `file_glob_v2` · `run_shell_command` · `read_shell_command_output` · `transfer_shell_command_control_to_user` · `apply_file_diffs` · `search_codebase`
-
-Not yet supported: MCP tools, subagents, computer use, passive suggestions.
+- **Bring your own backend** — OpenAI, DeepSeek, Ollama, OpenRouter, LM Studio, vLLM, or another OpenAI-compatible API.
+- **Switchable Agent harnesses** — Native, Pi Agent, and DeepSeek Harness profiles with independently selected models.
+- **Local and Managed SSH tools** — workspace-aware file search, reads, diffs, shell execution, and remote terminal context.
+- **Managed command lifecycle** — explicit foreground/background execution, `command_id`, output polling, input, cancellation, exit status, and executor-measured duration.
+- **Responsive Turns** — queue a follow-up or steer the active Turn without opening a second response stream.
+- **Native configuration** — provider, model, context size, harness, and profile settings live inside WarpLocal.
 
 ## Install
 
-### Option A: Download Release (Recommended)
+Download **[WarpLocal.app.zip](https://github.com/sasuke39/open-warp/releases/latest/download/WarpLocal.app.zip)** from the latest release, unzip it, and move `WarpLocal.app` to `/Applications`.
 
 ```bash
-sh ./install.sh
+xattr -cr /Applications/WarpLocal.app
+open /Applications/WarpLocal.app
 ```
 
-Downloads the latest `WarpLocal.app` from [GitHub Releases](https://github.com/sasuke39/open-warp/releases) and installs it.
+Current prebuilt releases target **Apple Silicon (arm64)** and use an ad-hoc development signature. A complete Windows installer is not available yet.
 
-> **macOS says the app is damaged?** Browser-downloaded unsigned apps can be blocked by Gatekeeper. Clear the quarantine attribute with:
-> ```bash
-> xattr -cr /Applications/WarpLocal.app
-> ```
-> Installing with `sh ./install.sh` handles this automatically.
+## Configure and use
 
-### Option B: Build from Source
+1. Open **Settings → Local Adapter**.
+2. Add an endpoint, API key, model, and context size; then choose an Agent harness.
+3. Open a local or SSH terminal and submit an Agent instruction.
+4. Switch the same input area back to terminal mode whenever you need direct shell control.
 
-Prerequisites: Go 1.22+, Rust toolchain, [Warp source](https://github.com/nicohman/warp) (v0.2026.04.29)
+Configuration and runtime state stay under local WarpLocal Application Support. Prompts, tool context, and API credentials are sent only to the provider endpoint you configure. Diagnostics redact keys, tokens, email addresses, and home paths, but should still be reviewed before sharing.
 
-```bash
-# 1. Clone this repo
-git clone https://github.com/sasuke39/open-warp.git
-cd open-warp
+## Project status
 
-# 2. Build the WarpLocal app bundle
-WARP_SRC=/path/to/warp-source sh ./build_and_bundle.sh
-open ./WarpLocal.app
-```
+The core Agent loop and managed shell lifecycle are usable. MCP, subagents, computer use, passive suggestions, and full Warp cloud parity are not yet implemented. This is an independent community project and is not affiliated with Warp.
 
-See **[WARP_CLIENT.md](./WARP_CLIENT.md)** for the full patch and build guide.
+## Documentation
 
-## Troubleshooting
-
-If WarpLocal crashes or behaves unexpectedly, generate diagnostics:
-
-```bash
-# If you have the repo:
-sh ./install.sh doctor
-
-# If you only have the app:
-bash <(curl -fsSL https://raw.githubusercontent.com/sasuke39/open-warp/main/diagnostics.sh)
-```
-
-Then open a [bug report](https://github.com/sasuke39/open-warp/issues/new?template=bug_report.yml) and paste the generated summary.
-
-See **[Troubleshooting](./docs/guide/troubleshooting.md)** for more help.
-
-## How to Use
-
-1. Download and open `WarpLocal.app`.
-2. Open Warp's native **Settings → Local Adapter** page.
-3. Select your provider and fill in the base URL, API key, and model name.
-4. Save the settings. The local adapter reloads automatically.
-5. Go back to WarpLocal, press `Cmd+K`, and ask the terminal to help.
-
-Example prompts:
-
-```text
-Analyze this directory.
-Explain this error and suggest a fix.
-Create a simple text file.
-Find the server entry point and summarize how it works.
-```
-
-`WarpLocal.app` starts the local adapter helper for you. You do not need to run a separate server for normal use.
-
-## Configuration
-
-Runtime config is stored in `config.yaml` (or `~/Library/Application Support/WarpLocal/config.yaml` for bundled apps).
-
-```yaml
-provider: openai-compatible
-base_url: https://api.openai.com/v1
-api_key: YOUR_API_KEY
-model: gpt-4.1-mini
-server:
-  host: 127.0.0.1
-  port: 18888
-```
-
-For normal use, configure everything from Warp's native **Settings → Local Adapter** page. The YAML file is mainly useful for debugging or automation. The adapter no longer serves a browser-based settings page.
-
-## Repository Layout
-
-```text
-├── cmd/server/                 # Go HTTP server (local adapter)
-├── internal/agent/             # system prompt
-├── internal/config/            # config loading
-├── internal/llm/               # OpenAI-compatible LLM client
-├── internal/proto/             # generated Go protobuf files
-├── internal/tools/             # local tool implementations
-├── patches/                    # Warp client patches
-├── assets/                     # app icon
-├── build_and_bundle.sh         # macOS WarpLocal.app builder
-├── install.sh                  # one-click installer
-├── WARP_CLIENT.md              # full patch + build guide
-```
-
-## Warp Client Patches
-
-The `patches/` directory contains the Warp client patches:
-
-| Patch | Purpose |
-|-------|---------|
-| 0001 | `WarpServerConfig::local_adapter()` — routes requests to `127.0.0.1:18888` |
-| 0002 | `Channel::Local` entrypoint — activates local adapter config |
-| 0003 | Skip Firebase auth — local adapter doesn't need cloud auth |
-| 0004 | CJK natural language detection — Chinese/Japanese/Korean input recognized as AI queries |
-| 0005 | Native **Settings → Local Adapter** menu entry in Warp UI |
-| 0006 | Skip onboarding for local adapter builds |
-| 0007 | Gracefully stop the adapter helper when WarpLocal exits |
-| 0012 | Replace the legacy browser page with native provider and Agent Harness settings |
-
-See **[WARP_CLIENT.md](./WARP_CLIENT.md)** for details on each patch.
-
-## App Bundle Structure
-
-```
-WarpLocal.app/
-└── Contents/
-    ├── MacOS/warp                # WarpLocal main binary
-    ├── Helpers/warp-local-adapter # Go AI backend server
-    ├── Helpers/node-runtime       # Runtime for bundled external harnesses
-    └── Resources/
-        ├── config.example.yaml
-        ├── pi-runtime/
-        ├── dsh-runtime/
-        └── iconfile.icns
-```
-
-The Warp client manages the adapter server lifecycle: it starts the helper automatically and keeps it running.
+[Getting started](https://sasuke39.github.io/open-warp/guide/getting-started) · [Configuration](https://sasuke39.github.io/open-warp/guide/configuration) · [Supported tools](https://sasuke39.github.io/open-warp/guide/supported-tools) · [Troubleshooting](https://sasuke39.github.io/open-warp/guide/troubleshooting) · [Build guide](./WARP_CLIENT.md)
 
 ## Development
 
 ```bash
 go test ./...
-gofmt -w ./cmd ./internal
+WARP_SRC=/path/to/warp-source sh ./build_and_bundle.sh
 ```
 
-## Roadmap
-
-1. `ask_user_question` tool support
-2. Better `apply_file_diffs` failure reporting
-3. Improved long-running shell command behavior
-4. CI-based release automation
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=sasuke39/open-warp&type=Date)](https://star-history.com/#sasuke39/open-warp&Date)
-
-## License
-
-MIT. See [LICENSE](./LICENSE).
+MIT licensed. See [LICENSE](./LICENSE).
