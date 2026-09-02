@@ -10,6 +10,10 @@
 
 `open-warp` connects a patched Warp client to a local Go adapter and any OpenAI-compatible endpoint. The official Warp app can remain installed; `WarpLocal.app` uses separate local configuration and runtime state.
 
+## Architecture
+
+<p align="center"><img src="./docs/public/architecture.svg" alt="open-warp architecture: WarpLocal client, local adapter, Agent runtimes, model providers, and execution targets"></p>
+
 <table>
   <tr><td><img src="./docs/agent-unified-input/prototypes/warp-complete-agent.png" alt="Agent and terminal timeline"></td><td><img src="./docs/agent-unified-input/prototypes/warp-complete-terminal.png" alt="Terminal input mode"></td></tr>
   <tr><td align="center">Agent and terminal events in one timeline</td><td align="center">Terminal commands stay available during an Agent Turn</td></tr>

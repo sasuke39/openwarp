@@ -10,6 +10,10 @@
 
 `open-warp` 将修改后的 Warp 客户端连接到本机 Go Adapter，并支持任意 OpenAI 兼容接口。它可以和官方 Warp 同时安装，`WarpLocal.app` 使用独立的本地配置与运行数据。
 
+## 项目架构
+
+<p align="center"><img src="./docs/public/architecture.svg" alt="open-warp 架构：WarpLocal 客户端、本地 Adapter、Agent Runtime、模型服务与执行目标"></p>
+
 <table>
   <tr><td><img src="./docs/agent-unified-input/prototypes/warp-complete-agent.png" alt="Agent 与终端统一时间线"></td><td><img src="./docs/agent-unified-input/prototypes/warp-complete-terminal.png" alt="终端输入模式"></td></tr>
   <tr><td align="center">Agent 与终端事件出现在同一时间线</td><td align="center">Agent 运行时仍可直接使用终端</td></tr>

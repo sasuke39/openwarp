@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="820" viewBox="0 0 1440 820" role="img" aria-labelledby="title desc">
+  <title id="title">open-warp architecture</title>
+  <desc id="desc">WarpLocal connects a desktop client to local Agent runtimes, configured model endpoints, and local or SSH execution targets through a local Go adapter.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0B1220"/><stop offset="1" stop-color="#111827"/></linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#A78BFA"/><stop offset="1" stop-color="#7C3AED"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#020617" flood-opacity=".35"/></filter>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0l10 5-10 5z" fill="#38BDF8"/></marker>
+    <marker id="arrowViolet" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0l10 5-10 5z" fill="#A78BFA"/></marker>
+    <style>
+      .title{font:700 28px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#F8FAFC}.eyebrow{font:700 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:1.6px;fill:#7DD3FC}.h{font:700 19px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#F8FAFC}.body{font:500 15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#CBD5E1}.small{font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#94A3B8}.chip{font:700 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#E2E8F0}.label{font:700 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#BAE6FD}.card{fill:#172033;stroke:#334155;stroke-width:1.5}.sub{fill:#111A2B;stroke:#2B3A51;stroke-width:1.3}
+    </style>
+  </defs>
+  <rect width="1440" height="820" rx="30" fill="url(#bg)"/>
+  <circle cx="1270" cy="90" r="190" fill="#0EA5E9" opacity=".07"/><circle cx="160" cy="740" r="220" fill="#8B5CF6" opacity=".06"/>
+  <text x="72" y="74" class="title">open-warp architecture</text><text x="72" y="102" class="body">A local-first Agent and terminal stack with pluggable runtimes, models, and execution targets.</text>
+  <rect x="55" y="136" width="960" height="616" rx="25" fill="#0F172A" stroke="#334155" stroke-width="1.5" stroke-dasharray="8 8"/>
+  <rect x="79" y="119" width="156" height="34" rx="17" fill="#1E293B"/><text x="157" y="141" text-anchor="middle" class="chip">LOCAL TRUST BOUNDARY</text>
+  <g filter="url(#shadow)"><rect x="85" y="182" width="390" height="520" rx="22" class="card"/><rect x="509" y="182" width="472" height="520" rx="22" class="card"/><rect x="1048" y="182" width="307" height="230" rx="22" class="card"/><rect x="1048" y="446" width="307" height="256" rx="22" class="card"/></g>
+  <g transform="translate(113 210)">
+    <rect width="48" height="48" rx="12" fill="#101827"/><path fill="#39BEF8" fill-rule="evenodd" d="M12 14h17c8 0 14 4 14 10s-6 10-14 10H12V14Zm7 6v8h10c5 0 7-1 7-4s-2-4-7-4H19Z"/><rect x="13" y="38" width="29" height="4" rx="2" fill="#A88BFA"/>
+    <text x="66" y="20" class="eyebrow">DESKTOP CLIENT</text><text x="66" y="44" class="h">WarpLocal</text>
+    <rect y="80" width="334" height="100" rx="16" class="sub"/><text x="20" y="111" class="h">Unified workspace</text><text x="20" y="138" class="body">Terminal blocks + Agent Turns</text><text x="20" y="160" class="small">Follow-up queue · steer · cancellation</text>
+    <rect y="198" width="334" height="100" rx="16" class="sub"/><text x="20" y="229" class="h">Managed command UI</text><text x="20" y="256" class="body">foreground ↔ background lifecycle</text><text x="20" y="278" class="small">output · input · duration · exit status</text>
+    <rect y="316" width="334" height="100" rx="16" class="sub"/><text x="20" y="347" class="h">Local configuration</text><text x="20" y="374" class="body">Profiles, harnesses, models</text><text x="20" y="396" class="small">Per-conversation runtime selection</text>
+  </g>
+  <g transform="translate(537 210)">
+    <rect width="48" height="48" rx="12" fill="url(#violet)"/><path d="M14 16h20M14 24h14M14 32h20" stroke="#FFF" stroke-width="3" stroke-linecap="round"/>
+    <text x="66" y="20" class="eyebrow">LOCAL CONTROL PLANE</text><text x="66" y="44" class="h">Go Adapter</text>
+    <rect y="80" width="416" height="84" rx="16" class="sub"/><text x="20" y="111" class="h">Protocol gateway</text><text x="20" y="138" class="body">Provider normalization · streaming · redaction</text>
+    <text y="199" class="small">SELECTABLE AGENT RUNTIME</text>
+    <rect y="216" width="124" height="62" rx="14" fill="#15273A" stroke="#0EA5E9"/><text x="62" y="253" text-anchor="middle" class="chip">Native</text><rect x="146" y="216" width="124" height="62" rx="14" fill="#221C3A" stroke="#8B5CF6"/><text x="208" y="253" text-anchor="middle" class="chip">Pi Agent</text><rect x="292" y="216" width="124" height="62" rx="14" fill="#221C3A" stroke="#8B5CF6"/><text x="354" y="253" text-anchor="middle" class="chip">DSH</text>
+    <rect y="300" width="416" height="116" rx="16" class="sub"/><text x="20" y="331" class="h">Turn and tool orchestration</text><text x="20" y="358" class="body">Tool-call completion guarantees</text><text x="20" y="382" class="body">Command IDs · polling · input · cancellation</text><text x="20" y="404" class="small">Same lifecycle for local and Managed SSH</text>
+  </g>
+  <g transform="translate(1076 210)">
+    <text class="eyebrow" y="17">CONFIGURED ENDPOINTS</text><text y="50" class="h">Model providers</text>
+    <rect y="76" width="251" height="54" rx="13" class="sub"/><circle cx="24" cy="103" r="7" fill="#38BDF8"/><text x="43" y="108" class="body">OpenAI-compatible APIs</text><rect y="142" width="251" height="54" rx="13" class="sub"/><circle cx="24" cy="169" r="7" fill="#A78BFA"/><text x="43" y="174" class="body">Self-hosted models</text>
+  </g>
+  <g transform="translate(1076 474)">
+    <text class="eyebrow" y="17">EXECUTION TARGETS</text><text y="50" class="h">Managed environments</text>
+    <rect y="76" width="251" height="62" rx="13" class="sub"/><path d="M20 96l8 7-8 7m13 0h12" fill="none" stroke="#38BDF8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><text x="60" y="113" class="body">Local PTY / process</text><rect y="150" width="251" height="62" rx="13" class="sub"/><path d="M20 176h27M25 167h17M28 185h11" stroke="#A78BFA" stroke-width="3" stroke-linecap="round"/><text x="60" y="187" class="body">Managed SSH channel</text>
+  </g>
+  <path d="M475 340h34" stroke="#38BDF8" stroke-width="2.5" marker-end="url(#arrowBlue)"/><text x="492" y="325" text-anchor="middle" class="label">API</text><path d="M981 296h67" stroke="#A78BFA" stroke-width="2.5" marker-end="url(#arrowViolet)"/><text x="1014" y="280" text-anchor="middle" class="label">tokens</text><path d="M981 576h67" stroke="#38BDF8" stroke-width="2.5" marker-end="url(#arrowBlue)"/><text x="1014" y="558" text-anchor="middle" class="label">tools</text>
+  <text x="720" y="785" text-anchor="middle" class="small">Configuration and runtime state stay local; only the selected provider and execution target receive scoped requests.</text>
+</svg>
