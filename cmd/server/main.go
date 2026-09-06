@@ -29,6 +29,7 @@ import (
 	"github.com/sasuke39/open-warp/internal/config"
 	"github.com/sasuke39/open-warp/internal/llm"
 	"github.com/sasuke39/open-warp/internal/memory"
+	"github.com/sasuke39/open-warp/internal/remotemcp"
 	"github.com/sasuke39/open-warp/internal/tools"
 
 	"github.com/openai/openai-go"
@@ -216,6 +217,13 @@ func defaultConfigPath() string {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		if err := remotemcp.Run(context.Background(), os.Args[2:], os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	configPath := flag.String("config", "", "Path to config.yaml (default: ~/Library/Application Support/WarpLocal/config.yaml)")
 	flag.Parse()
 
