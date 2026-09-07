@@ -1,5 +1,5 @@
 <p align="right"><a href="./README_CN.md">简体中文</a></p>
-<p align="center"><img src="./docs/public/logo.svg" width="88" alt="open-warp logo"></p>
+<p align="center"><img src="./docs/public/openwarp-icon.png" width="88" alt="OpenWarp logo"></p>
 <h1 align="center">open-warp</h1>
 <p align="center">Bring your own model and Agent harness to a local-first Warp experience.</p>
 <p align="center">
@@ -8,11 +8,11 @@
   <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
 </p>
 
-`open-warp` connects a patched Warp client to a local Go adapter and any OpenAI-compatible endpoint. It also exposes the same managed server tools to Codex, Claude Code, and other local MCP clients. The official Warp app can remain installed; `WarpLocal.app` keeps separate configuration and runtime state.
+`open-warp` connects the OpenWarp desktop client to a local Agent Engine and any OpenAI-compatible endpoint. It also exposes the same managed server tools to Codex, Claude Code, and other local MCP clients. The official Warp app can remain installed; `OpenWarp.app` keeps separate configuration and runtime state.
 
 ## Architecture
 
-<p align="center"><img src="./docs/public/architecture.svg" alt="open-warp architecture: WarpLocal client, local adapter, Agent runtimes, model providers, and execution targets"></p>
+<p align="center"><img src="./docs/public/architecture.svg" alt="open-warp architecture: OpenWarp client, Agent Engine, Agent runtimes, model providers, and execution targets"></p>
 
 <table>
   <tr><td><img src="./docs/agent-unified-input/prototypes/warp-complete-agent.png" alt="Agent and terminal timeline"></td><td><img src="./docs/agent-unified-input/prototypes/warp-complete-terminal.png" alt="Terminal input mode"></td></tr>
@@ -29,27 +29,27 @@
 - **Managed command lifecycle** — explicit foreground/background execution, `command_id`, output polling, input, cancellation, exit status, and executor-measured duration.
 - **Local MCP bridge** — reuse saved SSH identities, default directories, shell, process, and transfer tools from Codex or Claude Code without copying credentials into the external Agent.
 - **Responsive Turns** — queue a follow-up or steer the active Turn without opening a second response stream.
-- **Native management UI** — configure providers, models, Agent profiles, SSH connections, and reusable Quick Paste snippets inside WarpLocal.
+- **Native management UI** — configure providers, models, Agent profiles, SSH connections, and reusable Quick Paste snippets inside OpenWarp.
 
 ## Install
 
-Download **[WarpLocal.app.zip](https://github.com/sasuke39/openwarp/releases/latest/download/WarpLocal.app.zip)** from the latest release, unzip it, and move `WarpLocal.app` to `/Applications`.
+Download **[OpenWarp.app.zip](https://github.com/sasuke39/openwarp/releases/latest/download/OpenWarp.app.zip)** from the latest release, unzip it, and move `OpenWarp.app` to `/Applications`.
 
 ```bash
-xattr -cr /Applications/WarpLocal.app
-open /Applications/WarpLocal.app
+xattr -cr /Applications/OpenWarp.app
+open /Applications/OpenWarp.app
 ```
 
 Current prebuilt releases target **Apple Silicon (arm64)** and use an ad-hoc development signature. A complete Windows installer is not available yet.
 
 ## Configure and use
 
-1. Open **Settings → Local Adapter**.
+1. Open **Settings → Agent Engine**.
 2. Add an endpoint, API key, model, and context size; then choose an Agent harness.
 3. Open a local or SSH terminal and submit an Agent instruction.
 4. Switch the same input area back to terminal mode whenever you need direct shell control.
 External Agents can connect through the local MCP stdio bridge after an explicit policy grants selected saved servers and transfer roots. See [MCP setup](./docs/external-mcp/setup.md).
-Configuration and runtime state stay under local WarpLocal Application Support. Prompts, tool context, and API credentials are sent only to the provider endpoint you configure. Diagnostics redact keys, tokens, email addresses, and home paths, but should still be reviewed before sharing.
+Configuration and runtime state stay local. Existing installations continue using their compatible local state directory. Prompts, tool context, and API credentials are sent only to the provider endpoint you configure.
 
 ## Project status
 

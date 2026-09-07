@@ -30,7 +30,7 @@ Warp 开源了客户端，但 AI 后端仍然由官方云服务控制。`open-wa
 
 项目包含两部分：
 
-- `WarpLocal.app`：打过补丁的 Warp 应用包，会把 AI 请求发送到 `127.0.0.1:18888`。
+- `OpenWarp.app`：打过补丁的 Warp 应用包，会把 AI 请求发送到 `127.0.0.1:18888`。
 - `warp-local-adapter`：Go 编写的本地后端，把 Warp protobuf 流转换为 OpenAI 兼容接口请求。
 
 ## 当前状态

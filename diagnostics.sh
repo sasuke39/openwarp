@@ -1,5 +1,5 @@
 #!/bin/bash
-# WarpLocal Diagnostics
+# OpenWarp Diagnostics
 #
 # Generates a diagnostic report for bug reporting.
 # All API keys, tokens, emails, and home directory paths are automatically redacted.
@@ -34,10 +34,10 @@ redact() {
 }
 
 ts="$(date +%Y%m%d-%H%M%S)"
-out_dir="$HOME/Desktop/WarpLocal-Diagnostics-${ts}"
+out_dir="$HOME/Desktop/OpenWarp-Diagnostics-${ts}"
 mkdir -p "$out_dir"
 
-info "WarpLocal Diagnostics"
+info "OpenWarp Diagnostics"
 info "Output: $out_dir"
 echo ""
 
@@ -51,7 +51,7 @@ locale_str="$(defaults read -g AppleLocale 2>/dev/null || echo unknown)"
 info "System: macOS $os_ver ($arch) $cpu_type Locale=$locale_str"
 
 # ── App info ──
-app_path="/Applications/WarpLocal.app"
+app_path="/Applications/OpenWarp.app"
 app_exists="false"
 app_quarantine="false"
 app_version="unknown"
@@ -167,7 +167,7 @@ crash_dir="$HOME/Library/Logs/DiagnosticReports"
 
 if [[ -d "$crash_dir" ]]; then
     crash_files=()
-    for f in "$crash_dir"/WarpLocal*.crash "$crash_dir"/WarpLocal*.ips "$crash_dir"/warp*.crash; do
+    for f in "$crash_dir"/OpenWarp*.crash "$crash_dir"/OpenWarp*.ips "$crash_dir"/WarpLocal*.crash "$crash_dir"/WarpLocal*.ips "$crash_dir"/warp*.crash; do
         [[ -f "$f" ]] && crash_files+=("$f")
     done
     crash_count=${#crash_files[@]}
@@ -211,7 +211,7 @@ cat > "$out_dir/diagnostics.json" <<DIAGNOSTICS
   "schema_version": "1.0",
   "generated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "app": {
-    "name": "WarpLocal",
+    "name": "OpenWarp",
     "version": "$app_version",
     "git_commit": "$app_commit",
     "build_time": "$app_build_time",
@@ -262,7 +262,7 @@ if [[ ${#missing_fields[@]} -gt 0 ]]; then
 fi
 
 cat > "$out_dir/issue-summary.md" <<SUMMARY
-## WarpLocal Diagnostics Summary
+## OpenWarp Diagnostics Summary
 
 **Generated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -303,7 +303,7 @@ SUMMARY
 
 # ── Write README.txt ──
 cat > "$out_dir/README.txt" <<README
-WarpLocal Diagnostics
+OpenWarp Diagnostics
 =====================
 
 This folder contains diagnostic information for bug reporting.

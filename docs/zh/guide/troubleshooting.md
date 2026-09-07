@@ -5,7 +5,7 @@
 当前应用未签名。如果通过浏览器下载，macOS 可能会添加隔离标记。
 
 ```bash
-xattr -cr /Applications/WarpLocal.app
+xattr -cr /Applications/OpenWarp.app
 ```
 
 ## 设置页打不开
@@ -16,11 +16,11 @@ xattr -cr /Applications/WarpLocal.app
 curl http://127.0.0.1:18888/health
 ```
 
-如果没有响应，完整退出 `WarpLocal.app` 后重新打开。
+如果没有响应，完整退出 `OpenWarp.app` 后重新打开。
 
 ## AI 请求出现服务商错误
 
-打开 WarpLocal 原生的 **设置 → Local Adapter** 页面。
+打开 OpenWarp 原生的 **设置 → Agent 引擎** 页面。
 
 确认：
 
@@ -35,7 +35,7 @@ curl http://127.0.0.1:18888/health
 
 ## 打开 WarpLocal 后官方 Warp 退出
 
-请使用最新发布包。`WarpLocal.app` 设计上可以和官方 Warp 并存。
+请使用最新发布包。`OpenWarp.app` 设计上可以和官方 Warp 并存。
 
 ## SSH 页签进入 Agent 后仍在本机执行
 

@@ -476,7 +476,7 @@ func (s *Server) handleSignupRemote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Warp Local</title></head>
+<head><meta charset="utf-8"><title>OpenWarp</title></head>
 <body>
 <p>Logging in to local Warp adapter...</p>
 <p>If nothing happens, <a href="%s">click here</a>.</p>
@@ -698,7 +698,7 @@ func (s *Server) handleAgentRequest(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 		})
-		s.sendFinishError(w, flusher, "Local Adapter is not configured. Open Settings → Local Adapter to configure your LLM provider.")
+		s.sendFinishError(w, flusher, "Agent Engine is not configured. Open Settings → Agent Engine to configure your LLM provider.")
 		return
 	}
 

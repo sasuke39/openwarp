@@ -1,5 +1,5 @@
 <p align="right"><a href="./README.md">English</a></p>
-<p align="center"><img src="./docs/public/logo.svg" width="88" alt="open-warp 标志"></p>
+<p align="center"><img src="./docs/public/openwarp-icon.png" width="88" alt="OpenWarp 标志"></p>
 <h1 align="center">open-warp</h1>
 <p align="center">在本地优先的 Warp 体验中使用自己的模型和 Agent 框架。</p>
 <p align="center">
@@ -8,11 +8,11 @@
   <a href="./LICENSE"><img alt="MIT 协议" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
 </p>
 
-`open-warp` 将修改后的 Warp 客户端连接到本机 Go Adapter，并支持任意 OpenAI 兼容接口；同一套受管服务器工具也可提供给 Codex、Claude Code 等本地 MCP 客户端。它可与官方 Warp 同时安装，`WarpLocal.app` 使用独立配置与运行数据。
+`open-warp` 将 OpenWarp 桌面客户端连接到本机 Agent 引擎，并支持任意 OpenAI 兼容接口；同一套受管服务器工具也可提供给 Codex、Claude Code 等本地 MCP 客户端。它可与官方 Warp 同时安装，`OpenWarp.app` 使用独立配置与运行数据。
 
 ## 项目架构
 
-<p align="center"><img src="./docs/public/architecture.svg" alt="open-warp 架构：WarpLocal 客户端、本地 Adapter、Agent Runtime、模型服务与执行目标"></p>
+<p align="center"><img src="./docs/public/architecture.svg" alt="open-warp 架构：OpenWarp 客户端、Agent 引擎、Agent Runtime、模型服务与执行目标"></p>
 
 <table>
   <tr><td><img src="./docs/agent-unified-input/prototypes/warp-complete-agent.png" alt="Agent 与终端统一时间线"></td><td><img src="./docs/agent-unified-input/prototypes/warp-complete-terminal.png" alt="终端输入模式"></td></tr>
@@ -29,27 +29,27 @@
 - **受管命令生命周期**：显式前台/后台模式，提供 `command_id`、输出读取、输入、停止、退出状态和执行器计时。
 - **本地 MCP 桥接**：Codex、Claude Code 可复用已保存的 SSH 身份、默认目录、命令、进程和传输工具，无需复制服务器凭据。
 - **不中断当前 Turn**：输入可排队为下一次 Follow-up，也可 Steer 当前 Turn，不会重复创建响应流。
-- **原生管理界面**：在 WarpLocal 内管理服务商、模型、Agent Profile、SSH 连接和 Quick Paste 常用片段。
+- **原生管理界面**：在 OpenWarp 内管理服务商、模型、Agent Profile、SSH 连接和 Quick Paste 常用片段。
 
 ## 安装
 
-从最新发布页下载 **[WarpLocal.app.zip](https://github.com/sasuke39/openwarp/releases/latest/download/WarpLocal.app.zip)**，解压后将 `WarpLocal.app` 移到 `/Applications`。
+从最新发布页下载 **[OpenWarp.app.zip](https://github.com/sasuke39/openwarp/releases/latest/download/OpenWarp.app.zip)**，解压后将 `OpenWarp.app` 移到 `/Applications`。
 
 ```bash
-xattr -cr /Applications/WarpLocal.app
-open /Applications/WarpLocal.app
+xattr -cr /Applications/OpenWarp.app
+open /Applications/OpenWarp.app
 ```
 
 当前预编译版本支持 **Apple Silicon（arm64）**，使用开发签名；Windows 完整安装包尚未提供。
 
 ## 配置与使用
 
-1. 打开 **设置 → Local Adapter**。
+1. 打开 **设置 → Agent 引擎**。
 2. 添加接口地址、API Key、模型和上下文长度，并选择 Agent 框架。
 3. 打开本地或 SSH 终端，输入 Agent 指令。
 4. 需要直接控制 Shell 时，可在同一输入区域切回终端模式。
 外部 Agent 可通过本地 MCP stdio 桥接接入；使用前需在策略中明确授权可见服务器和传输目录。详见 [MCP 配置](./docs/external-mcp/setup.md)。
-配置和运行数据保存在本机 WarpLocal 的 Application Support 目录中；提示词、工具上下文和 API 凭据只发送给你配置的模型服务。诊断包会隐藏密钥、Token、邮箱和用户目录，但分享前仍应人工检查。
+配置和运行数据保存在本机；旧版本会继续复用兼容的数据目录。提示词、工具上下文和 API 凭据只发送给你配置的模型服务。
 
 ## 项目状态
 

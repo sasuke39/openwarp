@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build and bundle WarpLocal.app with Warp as the main app and the local adapter as a helper.
+# Build and bundle OpenWarp.app with Warp as the main app and the Agent Engine as a helper.
 #
 # Usage:
 #   WARP_SRC=/path/to/warp-source ./build_and_bundle.sh [--launch]
@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WARP_SRC="${WARP_SRC:-}"
 # Keep the default release location, but allow a named preview bundle so UI work can be
 # opened side-by-side without replacing the user's installed App.
-BUNDLE_DIR="${WARPLOCAL_BUNDLE_DIR:-$SCRIPT_DIR/WarpLocal.app}"
+BUNDLE_DIR="${WARPLOCAL_BUNDLE_DIR:-$SCRIPT_DIR/OpenWarp.app}"
 ASSETS_DIR="$SCRIPT_DIR/assets"
 GO_CACHE_DIR="$SCRIPT_DIR/.gocache"
 GO_TMP_DIR="$SCRIPT_DIR/.gotmp"
@@ -73,7 +73,7 @@ WARPLOCAL_CONTRACT_NODE="$NODE_BIN" go test ./cmd/server \
   -run '^(TestEveryBundledAgentHasContractRunner|TestAgentContractMatrix)$' -count=1
 
 echo ""
-echo "=== Step 3/7: Building warp-local-adapter (Go server) ==="
+echo "=== Step 3/7: Building OpenWarp Agent Engine (Go server) ==="
 cd "$SCRIPT_DIR"
 mkdir -p "$SCRIPT_DIR/bin" "$GO_CACHE_DIR" "$GO_TMP_DIR"
 GOCACHE="$GO_CACHE_DIR" GOTMPDIR="$GO_TMP_DIR" GOFLAGS="-buildvcs=false" \
@@ -81,7 +81,7 @@ GOCACHE="$GO_CACHE_DIR" GOTMPDIR="$GO_TMP_DIR" GOFLAGS="-buildvcs=false" \
 echo "  -> bin/warp-local-adapter"
 
 echo ""
-echo "=== Step 4/7: Building warp (WarpLocal client binary) ==="
+echo "=== Step 4/7: Building OpenWarp client binary ==="
 cd "$WARP_SRC"
 cargo build --bin warp --features skip_firebase_anonymous_user,ssh_drag_and_drop
 echo "  -> target/debug/warp"
@@ -146,7 +146,7 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" << 'PLIST'
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleDisplayName</key>
-	<string>WarpLocal</string>
+	<string>OpenWarp</string>
 	<key>CFBundleExecutable</key>
 	<string>warp</string>
 	<key>CFBundleIdentifier</key>
@@ -156,7 +156,7 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" << 'PLIST'
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>WarpLocal</string>
+	<string>OpenWarp</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -171,7 +171,7 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" << 'PLIST'
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>WarpLocal URL Scheme</string>
+			<string>OpenWarp URL Scheme</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>warplocal</string>
@@ -212,8 +212,8 @@ echo ""
 echo "Bundle: $BUNDLE_DIR"
 echo ""
 echo "Contents:"
-echo "  MacOS/warp               (WarpLocal main application)"
-echo "  Helpers/warp-local-adapter (AI backend)"
+echo "  MacOS/warp               (OpenWarp main application)"
+echo "  Helpers/warp-local-adapter (Agent Engine)"
 echo "  Helpers/node-runtime       (Sidecar runtime)"
 echo "  Resources/pi-runtime       (Pi Agent Sidecar)"
 echo "  Resources/dsh-runtime      (DeepSeek Harness Sidecar)"

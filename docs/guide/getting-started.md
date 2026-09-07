@@ -1,19 +1,19 @@
 # Getting Started
 
-`open-warp` lets you use your own OpenAI-compatible LLM provider inside Warp through the `WarpLocal.app` bundle.
+`open-warp` lets you use your own OpenAI-compatible LLM provider inside Warp through the `OpenWarp.app` bundle.
 
 ## Install from release
 
-Download the latest `WarpLocal.app.zip` from:
+Download the latest `OpenWarp.app.zip` from:
 
 https://github.com/sasuke39/openwarp/releases
 
-Unzip it, move `WarpLocal.app` to `/Applications`, then open it.
+Unzip it, move `OpenWarp.app` to `/Applications`, then open it.
 
 If macOS says the app is damaged, clear the quarantine attribute:
 
 ```bash
-xattr -cr /Applications/WarpLocal.app
+xattr -cr /Applications/OpenWarp.app
 ```
 
 The install script also handles this automatically:
@@ -24,7 +24,7 @@ sh ./install.sh
 
 ## Configure your provider
 
-Open `WarpLocal.app`, then choose **Settings → Local Adapter**.
+Open `OpenWarp.app`, then choose **Settings → Agent Engine**.
 
 Fill in the fields shown in the settings window:
 
@@ -39,7 +39,7 @@ The local HTTP settings URL is still available for debugging, but normal users d
 
 ## Start using AI in WarpLocal
 
-Open `WarpLocal.app`, press `Cmd+K`, and ask a natural-language question.
+Open `OpenWarp.app`, press `Cmd+K`, and ask a natural-language question.
 
 Examples:
 

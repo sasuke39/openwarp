@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="820" viewBox="0 0 1440 820" role="img" aria-labelledby="title desc">
   <title id="title">open-warp architecture</title>
-  <desc id="desc">WarpLocal and external MCP clients connect through a local Go adapter to Agent runtimes, configured model endpoints, and local or SSH execution targets.</desc>
+  <desc id="desc">OpenWarp and external MCP clients connect through a local Agent Engine to Agent runtimes, configured model endpoints, and local or SSH execution targets.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0B1220"/><stop offset="1" stop-color="#111827"/></linearGradient>
     <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#A78BFA"/><stop offset="1" stop-color="#7C3AED"/></linearGradient>
@@ -19,14 +19,14 @@
   <g filter="url(#shadow)"><rect x="85" y="182" width="390" height="520" rx="22" class="card"/><rect x="509" y="182" width="472" height="520" rx="22" class="card"/><rect x="1048" y="182" width="307" height="230" rx="22" class="card"/><rect x="1048" y="446" width="307" height="256" rx="22" class="card"/></g>
   <g transform="translate(113 210)">
     <rect width="48" height="48" rx="12" fill="#101827"/><path fill="#39BEF8" fill-rule="evenodd" d="M12 14h17c8 0 14 4 14 10s-6 10-14 10H12V14Zm7 6v8h10c5 0 7-1 7-4s-2-4-7-4H19Z"/><rect x="13" y="38" width="29" height="4" rx="2" fill="#A88BFA"/>
-    <text x="66" y="20" class="eyebrow">DESKTOP CLIENT</text><text x="66" y="44" class="h">WarpLocal</text>
+    <text x="66" y="20" class="eyebrow">DESKTOP CLIENT</text><text x="66" y="44" class="h">OpenWarp</text>
     <rect y="80" width="334" height="100" rx="16" class="sub"/><text x="20" y="111" class="h">Unified workspace</text><text x="20" y="138" class="body">Terminal blocks + Agent Turns</text><text x="20" y="160" class="small">Follow-up queue · steer · cancellation</text>
     <rect y="198" width="334" height="100" rx="16" class="sub"/><text x="20" y="229" class="h">Managed command UI</text><text x="20" y="256" class="body">foreground ↔ background lifecycle</text><text x="20" y="278" class="small">output · input · duration · exit status</text>
     <rect y="316" width="334" height="100" rx="16" class="sub"/><text x="20" y="347" class="h">Local configuration</text><text x="20" y="374" class="body">Profiles, harnesses, models</text><text x="20" y="396" class="small">Per-conversation runtime selection</text>
   </g>
   <g transform="translate(537 210)">
     <rect width="48" height="48" rx="12" fill="url(#violet)"/><path d="M14 16h20M14 24h14M14 32h20" stroke="#FFF" stroke-width="3" stroke-linecap="round"/>
-    <text x="66" y="20" class="eyebrow">LOCAL CONTROL PLANE</text><text x="66" y="44" class="h">Go Adapter</text>
+    <text x="66" y="20" class="eyebrow">LOCAL CONTROL PLANE</text><text x="66" y="44" class="h">Agent Engine</text>
     <rect y="80" width="416" height="84" rx="16" class="sub"/><text x="20" y="111" class="h">Protocol gateway</text><text x="20" y="136" class="body">Agent streams · local MCP stdio / IPC</text><text x="20" y="157" class="small">Codex · Claude Code · scoped access</text>
     <text y="199" class="small">SELECTABLE AGENT RUNTIME</text>
     <rect y="216" width="124" height="62" rx="14" fill="#15273A" stroke="#0EA5E9"/><text x="62" y="253" text-anchor="middle" class="chip">Native</text><rect x="146" y="216" width="124" height="62" rx="14" fill="#221C3A" stroke="#8B5CF6"/><text x="208" y="253" text-anchor="middle" class="chip">Pi Agent</text><rect x="292" y="216" width="124" height="62" rx="14" fill="#221C3A" stroke="#8B5CF6"/><text x="354" y="253" text-anchor="middle" class="chip">DSH</text>

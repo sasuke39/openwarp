@@ -14,7 +14,7 @@ sh install.sh doctor
 
 ```bash
 # Option 1: Run from the app bundle
-bash /Applications/WarpLocal.app/Contents/Resources/diagnostics.sh
+bash /Applications/OpenWarp.app/Contents/Resources/diagnostics.sh
 
 # Option 2: One-line download and run
 bash <(curl -fsSL https://raw.githubusercontent.com/sasuke39/openwarp/main/diagnostics.sh)
@@ -36,7 +36,7 @@ All API keys, tokens, email addresses, and home directory paths are automaticall
 
 The app is currently unsigned. If it was downloaded through a browser, macOS may add a quarantine attribute.
 ```bash
-xattr -cr /Applications/WarpLocal.app
+xattr -cr /Applications/OpenWarp.app
 ```
 
 ## Local Adapter settings show offline
@@ -47,11 +47,11 @@ Check whether the adapter helper is listening:
 curl http://127.0.0.1:18888/health
 ```
 
-If nothing is listening, fully quit `WarpLocal.app` and open it again.
+If nothing is listening, fully quit `OpenWarp.app` and open it again.
 
 ## AI requests fail with provider errors
 
-Open WarpLocal's native **Settings → Local Adapter** page.
+Open OpenWarp's native **Settings → Agent Engine** page.
 
 Confirm:
 
@@ -66,4 +66,4 @@ Use the latest release. Older builds had stricter history cleanup that could rem
 
 ## Official Warp quits when WarpLocal opens
 
-Use the latest release. `WarpLocal.app` is designed to coexist with the official Warp app.
+Use the latest release. `OpenWarp.app` is designed to coexist with the official Warp app.
