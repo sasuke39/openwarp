@@ -1,8 +1,8 @@
 #!/bin/bash
-# WarpLocal Installer & Diagnostics
+# OpenWarp Installer & Diagnostics
 #
 # Usage:
-#   ./install.sh                    — Download pre-built WarpLocal.app
+#   ./install.sh                    — Download pre-built OpenWarp.app
 #   ./install.sh --build            — Build from source (requires Rust + Go)
 #   ./install.sh doctor             — Generate diagnostics for bug reports
 #
@@ -29,31 +29,31 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 # ─── Pre-built download path ────────────────────────────────────────────────
 
 install_prebuilt() {
-    info "Downloading pre-built WarpLocal.app..."
-    local release_url="$REPO/releases/latest/download/WarpLocal.app.zip"
-    local tmp_zip="/tmp/WarpLocal.app.zip"
+    info "Downloading pre-built OpenWarp.app..."
+    local release_url="$REPO/releases/latest/download/OpenWarp.app.zip"
+    local tmp_zip="/tmp/OpenWarp.app.zip"
 
     if command -v curl &>/dev/null; then
         if curl -fL "$release_url" -o "$tmp_zip"; then
             info "Downloaded latest release from GitHub"
-            rm -rf "$INSTALL_DIR/WarpLocal.app"
+            rm -rf "$INSTALL_DIR/OpenWarp.app"
             ditto -x -k "$tmp_zip" "$INSTALL_DIR"
-            xattr -cr "$INSTALL_DIR/WarpLocal.app" 2>/dev/null || true
-            info "Installed to $INSTALL_DIR/WarpLocal.app (quarantine cleared)"
+            xattr -cr "$INSTALL_DIR/OpenWarp.app" 2>/dev/null || true
+            info "Installed to $INSTALL_DIR/OpenWarp.app (quarantine cleared)"
             return
         fi
         warn "Latest GitHub release is not available yet; falling back to local bundle detection"
     fi
 
-    if [[ -d "$SCRIPT_DIR/WarpLocal.app" ]]; then
-        info "Found local WarpLocal.app bundle"
-        rm -rf "$INSTALL_DIR/WarpLocal.app"
-        cp -R "$SCRIPT_DIR/WarpLocal.app" "$INSTALL_DIR/WarpLocal.app"
-        xattr -cr "$INSTALL_DIR/WarpLocal.app" 2>/dev/null || true
-        info "Installed to $INSTALL_DIR/WarpLocal.app (quarantine cleared)"
+    if [[ -d "$SCRIPT_DIR/OpenWarp.app" ]]; then
+        info "Found local OpenWarp.app bundle"
+        rm -rf "$INSTALL_DIR/OpenWarp.app"
+        cp -R "$SCRIPT_DIR/OpenWarp.app" "$INSTALL_DIR/OpenWarp.app"
+        xattr -cr "$INSTALL_DIR/OpenWarp.app" 2>/dev/null || true
+        info "Installed to $INSTALL_DIR/OpenWarp.app (quarantine cleared)"
         return
     fi
-    error "Pre-built WarpLocal.app not available yet. Use --build to compile from source."
+    error "Pre-built OpenWarp.app not available yet. Use --build to compile from source."
 }
 
 # ─── Build from source path ─────────────────────────────────────────────────
@@ -115,16 +115,16 @@ install_build() {
 
     # Build
     export WARP_SRC
-    info "Building WarpLocal.app..."
+    info "Building OpenWarp.app..."
     "$SCRIPT_DIR/build_and_bundle.sh"
 
     # Install
-    if [[ -d "$SCRIPT_DIR/WarpLocal.app" ]]; then
-        cp -R "$SCRIPT_DIR/WarpLocal.app" "$INSTALL_DIR/WarpLocal.app"
-        xattr -cr "$INSTALL_DIR/WarpLocal.app" 2>/dev/null || true
-        info "Installed to $INSTALL_DIR/WarpLocal.app (quarantine cleared)"
+    if [[ -d "$SCRIPT_DIR/OpenWarp.app" ]]; then
+        cp -R "$SCRIPT_DIR/OpenWarp.app" "$INSTALL_DIR/OpenWarp.app"
+        xattr -cr "$INSTALL_DIR/OpenWarp.app" 2>/dev/null || true
+        info "Installed to $INSTALL_DIR/OpenWarp.app (quarantine cleared)"
     else
-        error "Build failed — WarpLocal.app not found"
+        error "Build failed — OpenWarp.app not found"
     fi
 }
 
@@ -162,7 +162,7 @@ if $DOCTOR; then
     exit 0
 fi
 
-info "WarpLocal Installer"
+info "OpenWarp Installer"
 echo ""
 
 if $BUILD; then
@@ -175,12 +175,12 @@ echo ""
 info "Installation complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Open WarpLocal from /Applications or Spotlight"
-echo "  2. Open Settings -> Local Adapter to configure your LLM provider"
+echo "  1. Open OpenWarp from /Applications or Spotlight"
+echo "  2. Open Settings -> Agent Engine to configure your LLM provider"
 echo "  3. Start chatting with AI in Warp!"
 echo ""
 
 if $LAUNCH; then
-    info "Launching WarpLocal..."
-    open "$INSTALL_DIR/WarpLocal.app"
+    info "Launching OpenWarp..."
+    open "$INSTALL_DIR/OpenWarp.app"
 fi

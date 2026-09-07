@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a WarpLocal bug or crash
+description: Report an OpenWarp bug or crash
 title: "[Bug]: "
 labels: ["bug", "needs-triage"]
 body:
@@ -32,7 +32,7 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Open WarpLocal.app
+        1. Open OpenWarp.app
         2. Press Cmd+K
         3. ...
     validations:
@@ -51,7 +51,7 @@ body:
       label: Diagnostics summary
       description: |
         Run `sh install.sh doctor` and paste the generated `issue-summary.md` here.
-        If you cannot run the doctor command, provide your macOS version, WarpLocal version, and install method.
+        If you cannot run the doctor command, provide your macOS version, OpenWarp version, and install method.
       render: markdown
     validations:
       required: true

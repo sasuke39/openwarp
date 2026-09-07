@@ -307,6 +307,7 @@ func contractNode(t *testing.T) string {
 	t.Helper()
 	candidates := []string{
 		os.Getenv("WARPLOCAL_CONTRACT_NODE"),
+		"/Applications/OpenWarp.app/Contents/Helpers/node-runtime",
 		"/Applications/WarpLocal.app/Contents/Helpers/node-runtime",
 	}
 	if path, err := exec.LookPath("node"); err == nil {

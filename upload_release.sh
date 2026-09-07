@@ -1,5 +1,5 @@
 #!/bin/bash
-# WarpLocal Release Upload
+# OpenWarp Release Upload
 #
 # Zip the built app, auto-bump version, and upload to GitHub Releases.
 #
@@ -12,14 +12,14 @@
 #   ./upload_release.sh --prerelease   — Create as prerelease
 #
 # Prerequisites:
-#   - WarpLocal.app built (by build_and_bundle.sh)
+#   - OpenWarp.app built (by build_and_bundle.sh)
 #   - gh CLI authenticated
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RELEASE_DIR="$SCRIPT_DIR/release"
-APP_PATH="$SCRIPT_DIR/WarpLocal.app"
+APP_PATH="$SCRIPT_DIR/OpenWarp.app"
 REPO="sasuke39/openwarp"
 
 GREEN='\033[0;32m'
@@ -52,7 +52,7 @@ done
 # ─── Validate ──
 
 if [[ ! -d "$APP_PATH" ]]; then
-    error "WarpLocal.app not found. Run build_and_bundle.sh first."
+    error "OpenWarp.app not found. Run build_and_bundle.sh first."
 fi
 
 if ! command -v gh &>/dev/null; then
@@ -118,14 +118,14 @@ info "build-info.json: version=$VERSION commit=$GIT_COMMIT arch=$BUILD_ARCH"
 # ─── Zip ──
 
 mkdir -p "$RELEASE_DIR"
-ZIP_NAME="WarpLocal.app.zip"
+ZIP_NAME="OpenWarp.app.zip"
 ZIP_PATH="$RELEASE_DIR/$ZIP_NAME"
 
 rm -f "$ZIP_PATH"
 
-info "Zipping WarpLocal.app..."
+info "Zipping OpenWarp.app..."
 cd "$SCRIPT_DIR"
-ditto -c -k --keepParent "WarpLocal.app" "$ZIP_PATH"
+ditto -c -k --keepParent "OpenWarp.app" "$ZIP_PATH"
 
 ZIP_SIZE="$(du -h "$ZIP_PATH" | cut -f1 | tr -d ' ')"
 info "Zipped: $ZIP_PATH ($ZIP_SIZE)"
@@ -148,10 +148,10 @@ git -C "$SCRIPT_DIR" push origin "$TAG"
 
 info "Creating GitHub release $TAG..."
 
-RELEASE_ARGS=(--repo "$REPO" --title "WarpLocal ${TAG#v}")
+RELEASE_ARGS=(--repo "$REPO" --title "OpenWarp ${TAG#v}")
 [[ -n "$DRAFT" ]] && RELEASE_ARGS+=("$DRAFT")
 [[ -n "$PRERELEASE" ]] && RELEASE_ARGS+=("$PRERELEASE")
-RELEASE_ARGS+=(--notes "Production bundle for WarpLocal ${TAG#v}.")
+RELEASE_ARGS+=(--notes "OpenWarp ${TAG#v}: renamed desktop product and Agent Engine settings, with the latest local MCP bridge, managed SSH lifecycle, and refreshed management UI.")
 
 gh release create "$TAG" "${RELEASE_ARGS[@]}"
 

@@ -11,6 +11,7 @@ conversations.json
 /server
 /launcher
 /WarpLocal.app/
+/OpenWarp.app/
 /release/
 bin/
 dist/
