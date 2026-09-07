@@ -1,5 +1,5 @@
 <p align="right"><a href="./README.md">English</a></p>
-<p align="center"><img src="./docs/public/logo.svg" width="88" alt="open-warp 标志"></p>
+<p align="center"><img src="./docs/public/openwarp-icon.png" width="88" alt="OpenWarp 标志"></p>
 <h1 align="center">open-warp</h1>
 <p align="center">在本地优先的 Warp 体验中使用自己的模型和 Agent 框架。</p>
 <p align="center">

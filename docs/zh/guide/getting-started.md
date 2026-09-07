@@ -1,19 +1,19 @@
 # 快速开始
 
-`open-warp` 通过 `WarpLocal.app`，让你在 Warp 里使用自己的 OpenAI 兼容大语言模型服务。
+`open-warp` 通过 `OpenWarp.app`，让你在 Warp 里使用自己的 OpenAI 兼容大语言模型服务。
 
 ## 从发布包安装
 
-从 GitHub 发布页下载最新的 `WarpLocal.app.zip`：
+从 GitHub 发布页下载最新的 `OpenWarp.app.zip`：
 
 https://github.com/sasuke39/openwarp/releases
 
-解压后，把 `WarpLocal.app` 移动到 `/Applications` 并打开。
+解压后，把 `OpenWarp.app` 移动到 `/Applications` 并打开。
 
 如果 macOS 提示应用已损坏，清除隔离标记：
 
 ```bash
-xattr -cr /Applications/WarpLocal.app
+xattr -cr /Applications/OpenWarp.app
 ```
 
 安装脚本也会自动处理这一步：
@@ -24,7 +24,7 @@ sh ./install.sh
 
 ## 配置模型服务
 
-打开 `WarpLocal.app`，然后在应用菜单中点击 `Local Adapter Settings...`。
+打开 `OpenWarp.app`，然后在应用菜单中点击 `Agent Engine Settings...`。
 
 在设置界面中填写：
 
@@ -39,7 +39,7 @@ sh ./install.sh
 
 ## 在 WarpLocal 中使用 AI
 
-打开 `WarpLocal.app`，按 `Cmd+K`，输入自然语言问题即可。
+打开 `OpenWarp.app`，按 `Cmd+K`，输入自然语言问题即可。
 
 示例：
 

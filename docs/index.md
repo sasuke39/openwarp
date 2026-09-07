@@ -30,7 +30,7 @@ Warp's client is open source, but its AI backend is still controlled by the offi
 
 The project ships two parts:
 
-- `WarpLocal.app`: a patched Warp app bundle that sends AI traffic to `127.0.0.1:18888`.
+- `OpenWarp.app`: a patched Warp app bundle that sends AI traffic to `127.0.0.1:18888`.
 - `warp-local-adapter`: a Go backend that translates Warp's protobuf stream into OpenAI-compatible chat completions.
 
 ## Current status

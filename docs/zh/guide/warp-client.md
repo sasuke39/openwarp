@@ -28,13 +28,13 @@
 git clone https://github.com/sasuke39/openwarp.git
 cd open-warp
 WARP_SRC=/path/to/warp-source sh ./build_and_bundle.sh
-open ./WarpLocal.app
+open ./OpenWarp.app
 ```
 
 生成的应用包结构：
 
 ```text
-WarpLocal.app/
+OpenWarp.app/
 └── Contents/
     ├── MacOS/warp
     ├── Helpers/warp-local-adapter

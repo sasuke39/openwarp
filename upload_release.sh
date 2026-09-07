@@ -10,6 +10,7 @@
 #   ./upload_release.sh --tag v1.2.3   — Use exact tag
 #   ./upload_release.sh --draft        — Create as draft
 #   ./upload_release.sh --prerelease   — Create as prerelease
+#   ./upload_release.sh --yes          — Skip confirmation
 #
 # Prerequisites:
 #   - OpenWarp.app built (by build_and_bundle.sh)
@@ -37,6 +38,7 @@ TAG=""
 BUMP="patch"
 DRAFT=""
 PRERELEASE=""
+ASSUME_YES=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -45,6 +47,7 @@ while [[ $# -gt 0 ]]; do
         --major)      BUMP="major"; shift ;;
         --draft)      DRAFT="--draft"; shift ;;
         --prerelease) PRERELEASE="--prerelease"; shift ;;
+        --yes)        ASSUME_YES=true; shift ;;
         *)            shift ;;
     esac
 done
@@ -86,10 +89,12 @@ echo ""
 
 # ─── Confirm ──
 
-read -rp "Upload release $TAG? [Y/n] " confirm
-if [[ "$(echo "$confirm" | tr '[:upper:]' '[:lower:]')" == "n" ]]; then
-    info "Aborted."
-    exit 0
+if [[ "$ASSUME_YES" != true ]]; then
+    read -rp "Upload release $TAG? [Y/n] " confirm
+    if [[ "$(echo "$confirm" | tr '[:upper:]' '[:lower:]')" == "n" ]]; then
+        info "Aborted."
+        exit 0
+    fi
 fi
 
 # ─── Write build-info.json into app bundle ──
@@ -114,6 +119,13 @@ cat > "$BUILD_INFO" <<BUILDINFO
 BUILDINFO
 
 info "build-info.json: version=$VERSION commit=$GIT_COMMIT arch=$BUILD_ARCH"
+
+# build-info.json is written after bundling, so restore and verify the bundle
+# signature before publishing it.
+SIGNING_IDENTITY="${CODESIGN_IDENTITY:--}"
+codesign --force --deep --sign "$SIGNING_IDENTITY" "$APP_PATH"
+codesign --verify --deep --strict "$APP_PATH"
+info "App signature verified after writing build metadata"
 
 # ─── Zip ──
 

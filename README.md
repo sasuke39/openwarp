@@ -1,5 +1,5 @@
 <p align="right"><a href="./README_CN.md">简体中文</a></p>
-<p align="center"><img src="./docs/public/logo.svg" width="88" alt="open-warp logo"></p>
+<p align="center"><img src="./docs/public/openwarp-icon.png" width="88" alt="OpenWarp logo"></p>
 <h1 align="center">open-warp</h1>
 <p align="center">Bring your own model and Agent harness to a local-first Warp experience.</p>
 <p align="center">
