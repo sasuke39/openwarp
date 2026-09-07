@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="820" viewBox="0 0 1440 820" role="img" aria-labelledby="title desc">
   <title id="title">open-warp architecture</title>
-  <desc id="desc">WarpLocal connects a desktop client to local Agent runtimes, configured model endpoints, and local or SSH execution targets through a local Go adapter.</desc>
+  <desc id="desc">WarpLocal and external MCP clients connect through a local Go adapter to Agent runtimes, configured model endpoints, and local or SSH execution targets.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0B1220"/><stop offset="1" stop-color="#111827"/></linearGradient>
     <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#A78BFA"/><stop offset="1" stop-color="#7C3AED"/></linearGradient>
@@ -27,7 +27,7 @@
   <g transform="translate(537 210)">
     <rect width="48" height="48" rx="12" fill="url(#violet)"/><path d="M14 16h20M14 24h14M14 32h20" stroke="#FFF" stroke-width="3" stroke-linecap="round"/>
     <text x="66" y="20" class="eyebrow">LOCAL CONTROL PLANE</text><text x="66" y="44" class="h">Go Adapter</text>
-    <rect y="80" width="416" height="84" rx="16" class="sub"/><text x="20" y="111" class="h">Protocol gateway</text><text x="20" y="138" class="body">Provider normalization · streaming · redaction</text>
+    <rect y="80" width="416" height="84" rx="16" class="sub"/><text x="20" y="111" class="h">Protocol gateway</text><text x="20" y="136" class="body">Agent streams · local MCP stdio / IPC</text><text x="20" y="157" class="small">Codex · Claude Code · scoped access</text>
     <text y="199" class="small">SELECTABLE AGENT RUNTIME</text>
     <rect y="216" width="124" height="62" rx="14" fill="#15273A" stroke="#0EA5E9"/><text x="62" y="253" text-anchor="middle" class="chip">Native</text><rect x="146" y="216" width="124" height="62" rx="14" fill="#221C3A" stroke="#8B5CF6"/><text x="208" y="253" text-anchor="middle" class="chip">Pi Agent</text><rect x="292" y="216" width="124" height="62" rx="14" fill="#221C3A" stroke="#8B5CF6"/><text x="354" y="253" text-anchor="middle" class="chip">DSH</text>
     <rect y="300" width="416" height="116" rx="16" class="sub"/><text x="20" y="331" class="h">Turn and tool orchestration</text><text x="20" y="358" class="body">Tool-call completion guarantees</text><text x="20" y="382" class="body">Command IDs · polling · input · cancellation</text><text x="20" y="404" class="small">Same lifecycle for local and Managed SSH</text>
@@ -40,6 +40,6 @@
     <text class="eyebrow" y="17">EXECUTION TARGETS</text><text y="50" class="h">Managed environments</text>
     <rect y="76" width="251" height="62" rx="13" class="sub"/><path d="M20 96l8 7-8 7m13 0h12" fill="none" stroke="#38BDF8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><text x="60" y="113" class="body">Local PTY / process</text><rect y="150" width="251" height="62" rx="13" class="sub"/><path d="M20 176h27M25 167h17M28 185h11" stroke="#A78BFA" stroke-width="3" stroke-linecap="round"/><text x="60" y="187" class="body">Managed SSH channel</text>
   </g>
-  <path d="M475 340h34" stroke="#38BDF8" stroke-width="2.5" marker-end="url(#arrowBlue)"/><text x="492" y="325" text-anchor="middle" class="label">API</text><path d="M981 296h67" stroke="#A78BFA" stroke-width="2.5" marker-end="url(#arrowViolet)"/><text x="1014" y="280" text-anchor="middle" class="label">tokens</text><path d="M981 576h67" stroke="#38BDF8" stroke-width="2.5" marker-end="url(#arrowBlue)"/><text x="1014" y="558" text-anchor="middle" class="label">tools</text>
+  <path d="M475 340h34" stroke="#38BDF8" stroke-width="2.5" marker-end="url(#arrowBlue)"/><text x="492" y="325" text-anchor="middle" class="label">local API</text><path d="M981 296h67" stroke="#A78BFA" stroke-width="2.5" marker-end="url(#arrowViolet)"/><text x="1014" y="280" text-anchor="middle" class="label">tokens</text><path d="M981 576h67" stroke="#38BDF8" stroke-width="2.5" marker-end="url(#arrowBlue)"/><text x="1014" y="558" text-anchor="middle" class="label">tools</text>
   <text x="720" y="785" text-anchor="middle" class="small">Configuration and runtime state stay local; only the selected provider and execution target receive scoped requests.</text>
 </svg>
