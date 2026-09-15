@@ -19,11 +19,16 @@
 3. 启动客户端时设置 `WARPLOCAL_TOOL_IPC_DIR` 指向这个目录。
 4. 成功启动后目录下出现 `tools.sock`。
 
-没有指定环境变量时，目录使用系统临时目录下的 `warplocal-tools-<uid>`。
+没有指定环境变量时，Socket 使用系统临时目录下的 `warplocal-tools-<uid>`。
+授权策略使用 `~/.warp-local/tool-ipc/policy.json`，首次升级迁移已有旧策略。
+显式指定目录时仍从该目录读取策略，适用于隔离测试。
+实现和兼容说明见 [策略持久化](persistent-policy.md)。
 macOS 的 Unix socket 路径长度有限；自定义目录建议使用简短绝对路径。
 不需要在此再次填写账号、密码、密钥和默认目录。
 
 `server_ids` 是外部使用授权，不改变 SSH 账号在服务器上的权限。
+上传允许当前用户可读取的任意本地普通文件，不检查 `transfer_roots`。
+`transfer_roots` 仅限制下载写入的本地目录；空列表禁止下载。
 撤销服务器授权或设置 enabled=false 对后续调用生效；新增授权需重启 App。
 修改已使用的服务器配置后，当前版本要求重启 App，避免旧任务切换到新目标。
 停用服务不自动终止已启动的远端任务。
