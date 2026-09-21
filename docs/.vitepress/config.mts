@@ -1,21 +1,32 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: 'open-warp',
-  description: 'Use your own OpenAI-compatible LLM provider inside Warp.',
+  title: 'OpenWarp',
+  description: 'Your terminal. Your intelligence. Choose your models, work over SSH, and connect your coding agents through MCP.',
+  appearance: false,
   base: '/openwarp/',
   cleanUrls: true,
+  locales: {
+    root: { label: 'English', lang: 'en' },
+    zh: {
+      label: '简体中文', lang: 'zh-CN',
+      themeConfig: { nav: [
+        { text: '使用指南', link: '/zh/guide/getting-started' },
+        { text: '工具能力', link: '/zh/guide/supported-tools' }
+      ] }
+    }
+  },
   head: [
-    ['meta', { name: 'theme-color', content: '#111827' }],
-    ['meta', { property: 'og:title', content: 'open-warp' }],
-    ['meta', { property: 'og:description', content: 'A local open-source AI backend for Warp.' }]
+    ['meta', { name: 'theme-color', content: '#f8f7f3' }],
+    ['link', { rel: 'icon', type: 'image/png', href: '/openwarp/openwarp-icon.png' }],
+    ['meta', { property: 'og:title', content: 'OpenWarp — Your terminal. Your intelligence.' }],
+    ['meta', { property: 'og:description', content: 'Choose your models. Work locally or over SSH. Connect your coding agents through MCP.' }]
   ],
   themeConfig: {
-    logo: '/logo.svg',
+    logo: '/openwarp-icon.png',
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'Tools', link: '/guide/supported-tools' },
-      { text: '中文', link: '/zh/' }
+      { text: 'Tools', link: '/guide/supported-tools' }
     ],
     sidebar: {
       '/guide/': [
@@ -46,10 +57,6 @@ export default defineConfig({
     socialLinks: [
       { icon: 'github', link: 'https://github.com/sasuke39/openwarp' }
     ],
-    footer: {
-      message: 'Released under the MIT License.',
-      copyright: 'Copyright © 2026 open-warp contributors'
-    },
     search: {
       provider: 'local'
     }
