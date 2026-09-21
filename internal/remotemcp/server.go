@@ -33,7 +33,7 @@ type WriteInput struct {
 type TransferInput struct {
 	ServerID   string `json:"server_id"`
 	RequestID  string `json:"request_id" jsonschema:"Unique UUID, reused on transport retry"`
-	LocalPath  string `json:"local_path" jsonschema:"Absolute local path within an authorized transfer root"`
+	LocalPath  string `json:"local_path" jsonschema:"Absolute local path; upload accepts any readable regular file, download requires an authorized transfer root"`
 	RemotePath string `json:"remote_path" jsonschema:"Absolute remote path; upload and download may overwrite existing files"`
 }
 
@@ -74,7 +74,7 @@ func NewServer(transport Transport) *mcp.Server {
 			return process(ctx, transport, "write", in.ProcessInput, in.RequestID, in.Input)
 		})
 	for _, op := range []string{"upload", "download"} {
-		mcp.AddTool(s, &mcp.Tool{Name: "sftp_" + op, Description: "Transfer one file using the saved SSH profile; only explicitly allowed local transfer roots are accessible. Existing destination files may be overwritten. No credentials are returned."},
+		mcp.AddTool(s, &mcp.Tool{Name: "sftp_" + op, Description: "Transfer one file using the saved SSH profile. Upload accepts any readable local regular file; download requires an authorized local transfer root. Existing destination files may be overwritten. No credentials are returned."},
 			func(ctx context.Context, _ *mcp.CallToolRequest, in TransferInput) (*mcp.CallToolResult, map[string]any, error) {
 				if err := validateInvocation(in.ServerID, in.RequestID); err != nil {
 					return nil, nil, err

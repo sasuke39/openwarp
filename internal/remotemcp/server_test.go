@@ -233,7 +233,7 @@ func TestDesktopSSHIntegration(t *testing.T) {
 		}
 		shell("echo NEXT_TURN_OK", "foreground", "", false)
 	})
-	t.Run("sftp upload download integrity and local path denial", func(t *testing.T) {
+	t.Run("sftp unrestricted upload and restricted download", func(t *testing.T) {
 		source := filepath.Join(root, "source file")
 		remote := filepath.Join(root, "remote file")
 		dest := filepath.Join(root, "download file")
@@ -250,7 +250,15 @@ func TestDesktopSSHIntegration(t *testing.T) {
 			t.Fatalf("integrity: %q %v", got, err)
 		}
 		args["request_id"] = uuid.NewString()
-		args["local_path"] = "/etc/hosts"
-		call("sftp_upload", args, true)
+		outside := t.TempDir()
+		outsideFile := filepath.Join(outside, "upload.txt")
+		if err := os.WriteFile(outsideFile, []byte("OUTSIDE_ROOT_UPLOAD_OK"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		args["local_path"] = outsideFile
+		call("sftp_upload", args, false)
+		args["request_id"] = uuid.NewString()
+		args["local_path"] = filepath.Join(outside, "denied-download.txt")
+		call("sftp_download", args, true)
 	})
 }
