@@ -24,7 +24,7 @@ sh ./install.sh
 
 ## 配置模型服务
 
-打开 `OpenWarp.app`，然后在应用菜单中点击 `Agent Engine Settings...`。
+打开 `OpenWarp.app`，进入 **Settings → Agent Engine**。
 
 在设置界面中填写：
 

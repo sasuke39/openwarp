@@ -1,0 +1,44 @@
+:root {
+  /* Primitives: paper, ink, and one cool accent. */
+  --ow-paper: #f8f7f3;
+  --ow-paper-deep: #eeede7;
+  --ow-ink: #202622;
+  --ow-gray: #5e655e;
+  --ow-line: #d8dbd3;
+  --ow-blue: #245f87;
+  --ow-night: #17211e;
+  --ow-night-muted: #b6c5bd;
+  --ow-night-line: #3c4d45;
+  --ow-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
+  --ow-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  /* Semantic and component tokens shared with documentation. */
+  --surface: var(--ow-paper);
+  --surface-subtle: var(--ow-paper-deep);
+  --foreground: var(--ow-ink);
+  --muted: var(--ow-gray);
+  --line: var(--ow-line);
+  --accent: var(--ow-blue);
+  --inverse-bg: var(--ow-night);
+  --inverse-fg: var(--ow-paper);
+  --inverse-muted: var(--ow-night-muted);
+  --inverse-line: var(--ow-night-line);
+  --button-bg: var(--foreground);
+  --button-fg: var(--surface);
+  --vp-font-family-base: var(--ow-font);
+  --vp-c-bg: var(--surface);
+  --vp-c-bg-alt: var(--surface-subtle);
+  --vp-c-bg-soft: var(--surface-subtle);
+  --vp-c-text-1: var(--foreground);
+  --vp-c-text-2: var(--muted);
+  --vp-c-brand-1: var(--accent);
+  --vp-c-brand-2: var(--accent);
+  --vp-c-divider: var(--line);
+}
+.dark {
+  --surface: var(--ow-night);
+  --surface-subtle: var(--ow-ink);
+  --foreground: var(--ow-paper);
+  --muted: var(--ow-night-muted);
+  --line: var(--ow-night-line);
+  --accent: #9bc7e1;
+}

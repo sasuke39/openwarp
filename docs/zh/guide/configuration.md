@@ -6,7 +6,7 @@
 ~/Library/Application Support/WarpLocal/config.yaml
 ```
 
-正常使用时，打开 `OpenWarp.app`，在应用菜单中点击 `Agent Engine Settings...` 即可修改配置。菜单背后仍然是本地网页设置端点，但用户通常不需要手动访问。
+正常使用时，打开 `OpenWarp.app`，进入 **Settings → Agent Engine** 修改配置。旧版客户端可能使用 `Agent Engine Settings...` 菜单；本地网页设置端点保留用于调试。
 
 ## 配置示例
 
