@@ -11,8 +11,7 @@
 4. 选择 Codex 或 Claude Code，点击“复制接入配置”，合并到对应工具的 MCP 配置。
 5. 在外部工具中重连 MCP；使用期间保持 OpenWarp 运行。
 
-开关和服务器权限对后续调用生效，无需重启 App。关闭后拒绝所有新调用，
-包括查询、输入和取消；已接收的命令继续执行，不会被自动终止。
+开关和服务器权限对后续调用生效，无需重启 App。关闭后拒绝所有新调用（包括查询、输入和取消）；已接收的命令继续执行，不会被自动终止。
 页面不自动修改外部工具配置，也不将 client-id 视为身份认证。
 
 ## 手工策略与隔离测试
@@ -31,8 +30,7 @@
 3. 启动客户端时设置 `WARPLOCAL_TOOL_IPC_DIR` 指向这个目录。
 4. 成功启动后目录下出现 `tools.sock`。
 
-没有指定环境变量时，Socket 使用系统临时目录下的 `warplocal-tools-<uid>`。
-授权策略使用 `~/.warp-local/tool-ipc/policy.json`，首次升级迁移已有旧策略。
+没有指定环境变量时，Socket 使用系统临时目录下的 `warplocal-tools-<uid>`；授权策略使用 `~/.warp-local/tool-ipc/policy.json`，首次升级迁移已有旧策略。
 显式指定目录时仍从该目录读取策略，适用于隔离测试。
 实现和兼容说明见 [策略持久化](persistent-policy.md)。
 macOS 的 Unix socket 路径长度有限；自定义目录建议使用简短绝对路径。
@@ -63,11 +61,9 @@ macOS 的 Unix socket 路径长度有限；自定义目录建议使用简短绝�
 }
 ```
 
-Claude Code 使用不同的稳定 `--client-id`，例如 `claude-code`。
-同一个调用方重连时保留该值，才能访问原执行上下文中的任务。
+Claude Code 使用不同的稳定 `--client-id`，例如 `claude-code`；同一个调用方重连时保留该值，才能访问原执行上下文中的任务。
 字段外围结构按调用客户端的 MCP 配置格式填写。
 
 MCP 桥接的 stdout 只用于协议，诊断写 stderr；无需模型 API Key。
 客户端不可用时明确报错，不启动另一个执行服务。
-已有 socket 不会自动删除，防止抢占另一 App；异常退出后确认原 App 已停止，
-再移除该具体 stale socket。不要删除整个状态目录。
+已有 socket 不会自动删除，防止抢占另一 App；异常退出后确认原 App 已停止，再移除该具体 stale socket。不要删除整个状态目录。
