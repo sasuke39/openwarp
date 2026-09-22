@@ -1,11 +1,12 @@
 :root {
-  /* Primitives: paper, ink, and one cool accent. */
-  --ow-paper: #f8f7f3;
-  --ow-paper-deep: #eeede7;
-  --ow-ink: #202622;
-  --ow-gray: #5e655e;
-  --ow-line: #d8dbd3;
-  --ow-blue: #245f87;
+  /* White and cool blue derived from the OpenWarp icon palette. */
+  --ow-paper: #ffffff;
+  --ow-paper-deep: #eef6fc;
+  --ow-ink: #0a1933;
+  --ow-midnight: #0b1c2d;
+  --ow-gray: #53647a;
+  --ow-line: #d9e4ef;
+  --ow-blue: #315f9c;
   --ow-night: #17211e;
   --ow-night-muted: #b6c5bd;
   --ow-night-line: #3c4d45;
@@ -22,7 +23,8 @@
   --inverse-fg: var(--ow-paper);
   --inverse-muted: var(--ow-night-muted);
   --inverse-line: var(--ow-night-line);
-  --button-bg: var(--foreground);
+  --section-tint: var(--ow-paper-deep);
+  --button-bg: var(--ow-ink);
   --button-fg: var(--surface);
   --vp-font-family-base: var(--ow-font);
   --vp-c-bg: var(--surface);

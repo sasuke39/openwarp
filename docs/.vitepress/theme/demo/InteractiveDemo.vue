@@ -2,7 +2,7 @@
 import { computed, ref, onUnmounted, watch, nextTick } from 'vue'
 import { scenarios } from './scenarios'
 import './demo.css'
-const scene = ref('local'), task = ref('deploy'), phase = ref('idle'), index = ref(-1), done = ref(0), paused = ref(false)
+const scene = ref('local'), task = ref('deploy'), phase = ref('complete'), index = ref(2), done = ref(3), paused = ref(false)
 const transcript = ref<HTMLElement>()
 const scenario = computed(() => scenarios[scene.value === 'codex' ? task.value : scene.value])
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -29,11 +29,11 @@ onUnmounted(clear)
 </script>
 
 <template>
-  <section id="interactive-demo" class="section-wrap interactive-demo" aria-label="交互产品演示">
-    <div class="demo-selector" role="group" aria-label="选择演示场景"><button v-for="(label, key) in {local:'01 本地 Agent',ssh:'02 SSH Agent',codex:'03 Codex + SSH MCP'}" :key="key" :aria-pressed="scene === key" @click="select(key)">{{ label }}</button></div>
-    <p class="demo-disclaimer">模拟演示</p>
+  <section id="interactive-demo" class="interactive-demo" aria-label="交互产品演示">
+    <div class="demo-selector" role="group" aria-label="选择演示场景"><button v-for="(label, key) in {local:'本地 Agent',ssh:'SSH Agent',codex:'Codex + SSH MCP'}" :key="key" :aria-pressed="scene === key" @click="select(key)">{{ label }}</button></div>
+    <p class="demo-disclaimer">交互演示 <span>· 模拟数据</span></p>
     <div class="demo-window" :class="{ 'codex-demo': scene === 'codex' }">
-      <header class="demo-titlebar"><span class="traffic" aria-hidden="true">● ● ●</span><span>{{ scene === 'codex' ? 'Codex · demo-api' : 'OpenWarp' }}</span><span class="demo-badge">{{ scene === 'codex' ? 'MCP · OpenWarp' : '⌕  Search sessions, agents, files…' }}</span></header>
+      <header class="demo-titlebar"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>{{ scene === 'codex' ? 'Codex · demo-api' : 'OpenWarp' }}</span><span class="demo-badge">{{ scene === 'codex' ? 'MCP · OpenWarp' : '⌕  Search sessions, agents, files…' }}</span></header>
       <div class="demo-workspace">
         <aside class="demo-sidebar"><span class="sidebar-label">{{ scene === 'codex' ? 'PROJECT' : 'WORKSPACES' }}</span><button :class="{selected:scene === 'local'}" @click="select('local')">⌘ 本地工作空间<small>~/workspace/demo-api</small></button><span class="sidebar-label">SSH</span><button :class="{selected:scene === 'ssh'}" @click="select('ssh')">⌁ demo-server<small>developer@demo-server</small></button><span class="sidebar-label">INTEGRATIONS</span><button :class="{selected:scene === 'codex'}" @click="select('codex')">↗ Codex + MCP<small>构建 · 部署 · 修复</small></button></aside>
         <div class="demo-main"><div class="demo-context"><span>{{ scene === 'local' ? '本地 · macOS / arm64' : scene === 'ssh' ? 'SSH · Linux / x86_64' : 'demo-api / main' }}</span><span class="demo-status" role="status">{{ paused ? '已暂停' : ({idle:'等待指令',connecting:'SSH 连接中…',enable:'等待启用 Warpify',enabling:'启用中…',ready:'Agent 已就绪',running:'正在运行',complete:'已完成'})[phase] }}</span></div>
