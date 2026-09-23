@@ -219,6 +219,7 @@ export class PiAgentRuntime {
     const modelRuntime = await this.modelRuntime()
     const model = modelRuntime.getModel('open-warp', requiredEnv('AGENT_RUNTIME_MODEL'))
     if (model === undefined) throw new Error(`Pi model ${requiredEnv('AGENT_RUNTIME_MODEL')} was not registered`)
+    const workspaceTools = createWorkspaceTools(owner, this.broker)
     const result = await createAgentSession({
       cwd: workingDir,
       agentDir,
@@ -228,8 +229,8 @@ export class PiAgentRuntime {
       resourceLoader: loader,
       settingsManager: settings,
       sessionManager: SessionManager.continueRecent(workingDir, sessionDir),
-      tools: ['bash', 'read', 'write', 'edit', 'grep', 'find', 'ls'],
-      customTools: createWorkspaceTools(owner, this.broker),
+      tools: workspaceTools.map(tool => tool.name),
+      customTools: workspaceTools,
     })
     const state = owner as SessionState
     state.session = result.session

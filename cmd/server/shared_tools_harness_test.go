@@ -35,6 +35,27 @@ func TestEveryHarnessToolRoundTripOverDesktopSSH(t *testing.T) {
 			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				text := string(body)
+				if name != "native" {
+					var request struct {
+						Tools []struct {
+							Function struct {
+								Name string `json:"name"`
+							} `json:"function"`
+						} `json:"tools"`
+					}
+					if err := json.Unmarshal(body, &request); err != nil {
+						t.Error(err)
+					}
+					advertised := map[string]bool{}
+					for _, tool := range request.Tools {
+						advertised[tool.Function.Name] = true
+					}
+					for _, required := range []string{"bash", "bash_output", "bash_write", "bash_cancel"} {
+						if !advertised[required] {
+							t.Errorf("%s model request is missing %s", name, required)
+						}
+					}
+				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				delta := map[string]any{"role": "assistant", "content": "TOOL_ROUND_OK"}
 				finish := "stop"

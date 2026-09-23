@@ -10,7 +10,11 @@ import { PiAgentRuntime } from '../src/runtime.js'
 test('Pi runtime suspends for a Warp tool and resumes the SDK session', { timeout: 20_000 }, async () => {
 	const root = await mkdtemp(join(tmpdir(), 'open-warp-pi-smoke-'))
 	let requestCount = 0
-	const server = createServer((_request, response) => {
+	const advertisedTools: string[][] = []
+	const server = createServer(async (_request, response) => {
+		let body = ''
+		for await (const chunk of _request) body += chunk
+		advertisedTools.push(JSON.parse(body).tools.map((tool: { function: { name: string } }) => tool.function.name))
 		requestCount++
 		response.writeHead(200, { 'content-type': 'text/event-stream' })
 		if (requestCount === 1) {
@@ -76,6 +80,9 @@ test('Pi runtime suspends for a Warp tool and resumes the SDK session', { timeou
 	try {
 		await runtime.handle(envelope('exchange-1', 'turn.start', request))
 		await awaitingTool
+		for (const name of ['bash', 'bash_output', 'bash_write', 'bash_cancel']) {
+			assert.ok(advertisedTools[0].includes(name), `model must receive ${name}`)
+		}
 		const call = events.find(event => event.type === 'tool.call.batch')?.tool_calls?.[0]
 		assert.equal(call?.name, 'workspace.shell')
 		await assert.rejects(
