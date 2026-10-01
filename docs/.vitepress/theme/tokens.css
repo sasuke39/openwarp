@@ -1,46 +1,59 @@
-:root {
-  /* White and cool blue derived from the OpenWarp icon palette. */
-  --ow-paper: #ffffff;
-  --ow-paper-deep: #eef6fc;
-  --ow-ink: #0a1933;
-  --ow-midnight: #0b1c2d;
-  --ow-gray: #53647a;
-  --ow-line: #d9e4ef;
-  --ow-blue: #315f9c;
-  --ow-night: #17211e;
-  --ow-night-muted: #b6c5bd;
-  --ow-night-line: #3c4d45;
-  --ow-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
-  --ow-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  /* Semantic and component tokens shared with documentation. */
-  --surface: var(--ow-paper);
-  --surface-subtle: var(--ow-paper-deep);
-  --foreground: var(--ow-ink);
-  --muted: var(--ow-gray);
-  --line: var(--ow-line);
-  --accent: var(--ow-blue);
-  --inverse-bg: var(--ow-night);
-  --inverse-fg: var(--ow-paper);
-  --inverse-muted: var(--ow-night-muted);
-  --inverse-line: var(--ow-night-line);
-  --section-tint: var(--ow-paper-deep);
-  --button-bg: var(--ow-ink);
-  --button-fg: var(--surface);
-  --vp-font-family-base: var(--ow-font);
-  --vp-c-bg: var(--surface);
-  --vp-c-bg-alt: var(--surface-subtle);
-  --vp-c-bg-soft: var(--surface-subtle);
-  --vp-c-text-1: var(--foreground);
-  --vp-c-text-2: var(--muted);
-  --vp-c-brand-1: var(--accent);
-  --vp-c-brand-2: var(--accent);
-  --vp-c-divider: var(--line);
-}
+:root,
 .dark {
-  --surface: var(--ow-night);
+  /* Deep navy, signal cyan and violet taken from the OpenWarp icon. */
+  --ow-void: #04070f;
+  --ow-ink: #070c1a;
+  --ow-panel: #0b1326;
+  --ow-panel-2: #101a33;
+  --ow-paper: #f4f7ff;
+  --ow-gray: #8b97b3;
+  --ow-dim: #5d6a88;
+  --ow-line: #1a2541;
+  --ow-line-strong: #27345a;
+  --ow-cyan: #22d3ff;
+  --ow-violet: #a97bff;
+  --ow-slate: #5b74b6;
+  --ow-glow: linear-gradient(100deg, var(--ow-cyan) 0%, #7fa8ff 45%, var(--ow-violet) 100%);
+  --ow-font: 'Geist Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --ow-mono: 'Geist Mono Variable', 'SFMono-Regular', ui-monospace, Consolas, 'Liberation Mono', monospace;
+  /* Semantic and component tokens shared with documentation. */
+  --surface: var(--ow-void);
   --surface-subtle: var(--ow-ink);
   --foreground: var(--ow-paper);
-  --muted: var(--ow-night-muted);
-  --line: var(--ow-night-line);
-  --accent: #9bc7e1;
+  --muted: var(--ow-gray);
+  --line: var(--ow-line);
+  --accent: var(--ow-cyan);
+  --accent-2: var(--ow-violet);
+  --inverse-bg: var(--ow-paper);
+  --inverse-fg: var(--ow-void);
+  --inverse-muted: var(--ow-dim);
+  --inverse-line: var(--ow-line-strong);
+  --section-tint: var(--ow-ink);
+  --button-bg: var(--ow-paper);
+  --button-fg: var(--ow-void);
+  --vp-font-family-base: var(--ow-font);
+  --vp-font-family-mono: var(--ow-mono);
+  --vp-c-bg: var(--surface);
+  --vp-c-bg-alt: var(--ow-ink);
+  --vp-c-bg-soft: var(--ow-panel);
+  --vp-c-bg-elv: var(--ow-panel);
+  --vp-c-text-1: var(--foreground);
+  --vp-c-text-2: #b3bdd6;
+  --vp-c-text-3: var(--ow-dim);
+  --vp-c-brand-1: var(--ow-cyan);
+  --vp-c-brand-2: #6fe3ff;
+  --vp-c-brand-3: #0fb4dc;
+  --vp-c-brand-soft: rgba(34, 211, 255, .14);
+  --vp-c-divider: var(--line);
+  --vp-c-gutter: var(--line);
+  --vp-c-border: var(--ow-line-strong);
+  --vp-code-block-bg: var(--ow-ink);
+  --vp-nav-bg-color: rgba(4, 7, 15, .72);
+  --vp-local-nav-bg-color: rgba(4, 7, 15, .72);
+  --vp-sidebar-bg-color: var(--ow-void);
+  --vp-button-brand-bg: var(--ow-cyan);
+  --vp-button-brand-text: var(--ow-void);
+  --vp-button-brand-hover-bg: #6fe3ff;
+  --vp-button-brand-hover-text: var(--ow-void);
 }
+::selection { background: rgba(34, 211, 255, .3); color: #fff }

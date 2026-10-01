@@ -1,6 +1,8 @@
 import { h } from 'vue'
 import DefaultTheme from 'vitepress/theme'
 import ProductHome from './ProductHome.vue'
+import '@fontsource-variable/geist'
+import '@fontsource-variable/geist-mono'
 import './tokens.css'
 import './home.css'
 
