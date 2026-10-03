@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'OpenWarp',
   description: 'AI terminal for local and SSH work. Connect coding agents to your servers through MCP.',
-  appearance: false,
+  appearance: 'force-dark',
   base: '/openwarp/',
   cleanUrls: true,
   locales: {
@@ -17,7 +17,7 @@ export default defineConfig({
     }
   },
   head: [
-    ['meta', { name: 'theme-color', content: '#f8f7f3' }],
+    ['meta', { name: 'theme-color', content: '#04070f' }],
     ['link', { rel: 'icon', type: 'image/png', href: '/openwarp/openwarp-icon.png' }],
     ['meta', { property: 'og:title', content: 'OpenWarp — AI terminal for local and SSH work' }],
     ['meta', { property: 'og:description', content: 'Choose your models. Work locally or over SSH. Connect your coding agents through MCP.' }]
