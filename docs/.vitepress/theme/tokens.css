@@ -14,8 +14,8 @@
   --ow-violet: #a97bff;
   --ow-slate: #5b74b6;
   --ow-glow: linear-gradient(100deg, var(--ow-cyan) 0%, #7fa8ff 45%, var(--ow-violet) 100%);
-  --ow-font: 'Geist Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
-  --ow-mono: 'Geist Mono Variable', 'SFMono-Regular', ui-monospace, Consolas, 'Liberation Mono', monospace;
+  --ow-font: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --ow-mono: 'IBM Plex Mono', 'SFMono-Regular', ui-monospace, Consolas, 'Liberation Mono', monospace;
   /* Semantic and component tokens shared with documentation. */
   --surface: var(--ow-void);
   --surface-subtle: var(--ow-ink);
